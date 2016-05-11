@@ -60,13 +60,21 @@ public:
 
 public:
   void setup(const sensor_msgs::CameraInfo::ConstPtr& cam_ros);
+  vpColVector getDirectionLineODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  vpColVector getPlaneCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  vpColVector getCenterPCL(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  static double computeX(const vpColVector coeffs, const double y, const double z);
+  static double computeY(const vpColVector coeffs, const double x, const double z);
+  static double computeZ(const vpColVector coeffs, const double x, const double y);
+  vpHomogeneousMatrix createTFPlane(const vpColVector coeffs, const double x, const double y, const double z);
+  pcl::PointCloud<pcl::PointXYZ> createPlaneFromInliers(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud, const pcl::PointIndices::Ptr inliers, pcl::ModelCoefficients::Ptr coefficients);
   void displayImage(const sensor_msgs::Image::ConstPtr& image);
   void spin();
   void getCoeffPlaneWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud, const double centroidx, const double centroidy, const double centroidz, vpColVector normal);
   void getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &image);
   void segColor(const sensor_msgs::PointCloud2::ConstPtr &image);
   void init();
-  void createTFLine(const vpColVector theta, vpColVector normal, const double x, const double y, const double z, const vpColVector xp, const vpRotationMatrix cRp, const vpHomogeneousMatrix cMp);
+  void createTFLine(const vpColVector coeffs, vpColVector normal, const double x, const double y, const double z, const vpColVector xp, const vpRotationMatrix cRp, const vpHomogeneousMatrix cMp);
 
 protected:
   ros::NodeHandle n;
@@ -117,7 +125,7 @@ RosTestNode::RosTestNode(ros::NodeHandle nh)
   inliers_pub = n.advertise< pcl_msgs::PointIndices >("Inliers", 1);
   center_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("Center", 1);
   coeff_pub = n.advertise< pcl_msgs::ModelCoefficients >("Coeff", 1);
-  homogeneous_pub = n.advertise< geometry_msgs::Transform >("Homogeneous", 1);
+  homogeneous_pub = n.advertise< geometry_msgs::Pose >("Homogeneous", 1);
   homogeneous2_pub = n.advertise< geometry_msgs::Pose >("Homogeneous_dh", 1);
   pcl_image_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_Plane", 1);
   pcl_inside_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_Inside", 1);
@@ -174,7 +182,7 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
   vpRotationMatrix cRp;
   vpTranslationVector P0;
   vpHomogeneousMatrix cMp;
-  geometry_msgs::Transform cMp_msg;
+  geometry_msgs::Pose cMp_msg;
   tf::Transform transform;
   static tf::TransformBroadcaster br;
   //  init();
@@ -204,7 +212,7 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
     std::cout << "Could not find a plane in the scene." << std::endl;
   else
   {
-    // Copy the points of the plane to a new cloud.
+    // Copy the inliers of the plane to a new cloud.
     pcl::ExtractIndices<pcl::PointXYZ> extract;
     extract.setInputCloud(cloud);
     extract.setIndices(inliers);
@@ -244,9 +252,9 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
     normal.normalize();
 
     //Create yp and xp
+    xp[0] = (-(coefficients->values[1]*yg + coefficients->values[2]*(zg+0.05) + coefficients->values[3])/(coefficients->values[0]))-xg;
     xp[1] = 0;
-    xp[2] = 0.02;
-    xp[0] = (-(coefficients->values[1]*yg + coefficients->values[2]*(zg+0.02) + coefficients->values[3])/(coefficients->values[0]))-xg;
+    xp[2] = 0.05;
     xp.normalize();
     yp = vpColVector::cross(normal,xp);
 
@@ -280,9 +288,9 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
     ROS_INFO("      [%lf,  %lf,  %lf,  %lf]", cMp[1][0], cMp[1][1], cMp[1][2], cMp[1][3]);
     ROS_INFO("      [%lf,  %lf,  %lf,  %lf]", cMp[2][0], cMp[2][1], cMp[2][2], cMp[2][3]);
     ROS_INFO("      [%lf,  %lf,  %lf,  %lf]", cMp[3][0], cMp[3][1], cMp[3][2], cMp[3][3]);
-    cMp_msg = visp_bridge::toGeometryMsgsTransform(cMp);
+    cMp_msg = visp_bridge::toGeometryMsgsPose(cMp);
     tf::Quaternion q;
-    q.setValue(cMp_msg.rotation.x,cMp_msg.rotation.y,cMp_msg.rotation.z,cMp_msg.rotation.w);
+    q.setValue(cMp_msg.orientation.x,cMp_msg.orientation.y,cMp_msg.orientation.z,cMp_msg.orientation.w);
     transform.setRotation(q);
 
 //    vpQuaternionVector qp = vpQuaternionVector( cMp.getRotationMatrix() );
@@ -308,8 +316,8 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
       xc = cloud->points[i].x;
       yc = cloud->points[i].y;
       zc = cloud->points[i].z;
-      z_calc_pd = -(coefficients->values[0]*xc + coefficients->values[1]*yc + (coefficients->values[3] + 0.04))/(coefficients->values[2]);
-      z_calc_ppd = -(coefficients->values[0]*xc + coefficients->values[1]*yc + coefficients->values[3] + 0.08)/(coefficients->values[2]);
+      z_calc_pd = -(coefficients->values[0]*xc + coefficients->values[1]*yc + coefficients->values[3])/(coefficients->values[2]) - 0.04;
+      z_calc_ppd = -(coefficients->values[0]*xc + coefficients->values[1]*yc + coefficients->values[3])/(coefficients->values[2]) - 0.08;
       //      ROS_INFO("z_calc = [%lf], z_mes = [%lf], percentage d'erreur = [%lf %%]",z_calc_pd, zc, 100*(zc-z_calc_pd)/z_calc_pd);
       if (zc < z_calc_pd && zc > z_calc_ppd )
       {
@@ -337,13 +345,14 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
     //Publish points outside the plan
     pcl_outside_pub.publish(*cloud_outside);
 
-    if (cloud_outside->size()<2){
+    if (cloud_outside->size()<50){
       ROS_INFO("No door handle detected");
     }
     else
     {
       std::vector<int> inliers2;
       Eigen::VectorXf Coeff_line;
+      vpColVector direction_line(3);
 
       // created RandomSampleConsensus object and compute the appropriated model
       pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_outside));
@@ -355,18 +364,18 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
       // copies all inliers of the model computed to another PointCloud
       pcl::copyPointCloud<pcl::PointXYZ>(*cloud_outside, inliers2, *final);
       ROS_INFO("vec1: %lf %lf %lf", Coeff_line[3], Coeff_line[4], Coeff_line[5]);
-      //    if (Coeff_line[3]>0)
-      //      direction_line[0] = Coeff_line[3];
-      //    else
-      //      direction_line[0] = -Coeff_line[3];
-      //    if (Coeff_line[4]<0)
-      //      direction_line[1] = Coeff_line[4];
-      //    else
-      //      direction_line[1] = -Coeff_line[4];
-      //    if (Coeff_line[5]>0)
-      //      direction_line[2] = Coeff_line[5];
-      //    else
-      //      direction_line[2] = -Coeff_line[5];
+      if (Coeff_line[3]>0)
+      {
+        direction_line[0] = Coeff_line[3];
+        direction_line[1] = Coeff_line[4];
+        direction_line[2] = Coeff_line[5];
+      }
+      else
+      {
+        direction_line[0] = -Coeff_line[3];
+        direction_line[1] = -Coeff_line[4];
+        direction_line[2] = -Coeff_line[5];
+      }
 
       sumx=0;
       sumy=0;
@@ -519,43 +528,43 @@ void RosTestNode::getImageAndPublish(const sensor_msgs::PointCloud2::ConstPtr &i
       center_dh = cMp.inverse() * center_dh;
 
       ////Method of the ODR Line
-      // Minimization
-      vpColVector v(3);
-      vpMatrix M;
-      vpRowVector m(3);
+//      // Minimization
+//      vpColVector v(3);
+//      vpMatrix M;
+//      vpRowVector m(3);
 
-      for(unsigned int i=0; i<final->size(); i++) {
-        m[0] = final->points[i].x - xg_dh;
-        m[1] = final->points[i].y - yg_dh;
-        m[2] = final->points[i].z - zg_dh;
-        M.stack(m);
-      }
-//      std::cout << "M:\n" << M << std::endl;
+//      for(unsigned int i=0; i<final->size(); i++) {
+//        m[0] = final->points[i].x - xg_dh;
+//        m[1] = final->points[i].y - yg_dh;
+//        m[2] = final->points[i].z - zg_dh;
+//        M.stack(m);
+//      }
+////      std::cout << "M:\n" << M << std::endl;
 
-      vpMatrix A = M.t() * M;
+//      vpMatrix A = M.t() * M;
 
-      vpColVector D;
-      vpMatrix V;
-      A.svd(D, V);
+//      vpColVector D;
+//      vpMatrix V;
+//      A.svd(D, V);
 
 //      std::cout << "A:\n" << A << std::endl;
 //      std::cout << "D:" << D.t() << std::endl;
 //      std::cout << "V:\n" << V << std::endl;
 
-      double largestSv = D[0];
-      unsigned int indexLargestSv = 0 ;
-      for (unsigned int i = 1; i < D.size(); i++) {
-        if ((D[i] > largestSv) ) {
-          largestSv = D[i];
-          indexLargestSv = i;
-        }
-      }
+//      double largestSv = D[0];
+//      unsigned int indexLargestSv = 0 ;
+//      for (unsigned int i = 1; i < D.size(); i++) {
+//        if ((D[i] > largestSv) ) {
+//          largestSv = D[i];
+//          indexLargestSv = i;
+//        }
+//      }
 
-      vpColVector h = V.getCol(indexLargestSv);
+//      vpColVector h = V.getCol(indexLargestSv);
 //      std::cout << "Estimated line vector: " << h.t() << std::endl;
 
        //Create the door handle tf with respect to the plane tf
-      RosTestNode::createTFLine(h, normal, center_dh[0], center_dh[1], center_dh[2], xp, cRp, cMp);
+      RosTestNode::createTFLine(direction_line, normal, center_dh[0], center_dh[1], center_dh[2], xp, cRp, cMp);
 
       //Create the door handle tf with respect to the camera tf
 //      RosTestNode::createTFLine(h, normal, xg_dh, yg_dh, zg_dh, xp, cRp, cMp);
@@ -690,7 +699,6 @@ void RosTestNode::createTFLine(const vpColVector coeffs, vpColVector normal, con
   vpHomogeneousMatrix cMdh;
   vpRotationMatrix pRdh;
   vpHomogeneousMatrix pMdh;
-  vpHomogeneousMatrix test;
   geometry_msgs::Pose cMdh_msg;
   geometry_msgs::Pose pMdh_msg;
   tf::Transform transformdh;
@@ -722,26 +730,6 @@ void RosTestNode::createTFLine(const vpColVector coeffs, vpColVector normal, con
   cRdh[0][2] = normal[0];
   cRdh[1][2] = normal[1];
   cRdh[2][2] = normal[2];
-  //with the angle between x of the door handle and x of the plane
-//  cRdh[0][0] = cos(angle);
-//  cRdh[1][0] = -sin(angle);
-//  cRdh[2][0] = 0;
-//  cRdh[0][1] = sin(angle);
-//  cRdh[1][1] = cos(angle);
-//  cRdh[2][1] = 0;
-//  cRdh[0][2] = 0;
-//  cRdh[1][2] = 0;
-//  cRdh[2][2] = 1;
-  //just a test of a fixed angle
-//  cRdh[0][0] = 0.707;
-//  cRdh[1][0] = -0.707;
-//  cRdh[2][0] = 0;
-//  cRdh[0][1] = 0.707;
-//  cRdh[1][1] = 0.707;
-//  cRdh[2][1] = 0;
-//  cRdh[0][2] = 0;
-//  cRdh[1][2] = 0;
-//  cRdh[2][2] = 1;
 
   transformdh.setOrigin( tf::Vector3(x, y, z ));
 
@@ -837,6 +825,162 @@ void RosTestNode::getCoeffPlaneWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr
 
 }
 
+vpColVector RosTestNode::getPlaneCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+{
+  pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients ());
+  pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+  pcl::SACSegmentation<pcl::PointXYZ> seg;
+  seg.setOptimizeCoefficients (true);
+  seg.setModelType (pcl::SACMODEL_PLANE);
+  seg.setMethodType (pcl::SAC_RANSAC);
+  seg.setDistanceThreshold (0.1);
+  //Create the inliers and coefficients for the biggest plan found
+  seg.setInputCloud (cloud);
+  seg.segment (*inliers, *coefficients);
+
+  vpColVector coeffs;
+  coeffs.stack(coefficients->values[0]);
+  coeffs.stack(coefficients->values[1]);
+  coeffs.stack(coefficients->values[2]);
+  coeffs.stack(coefficients->values[3]);
+
+  return coeffs;
+}
+
+double RosTestNode::computeX(const vpColVector coeffs, const double y, const double z)
+{
+  double x = -(coeffs[1]*y + coeffs[2]*z + coeffs[3])/(coeffs[0]);
+  return x;
+}
+
+double RosTestNode::computeY(const vpColVector coeffs, const double x, const double z)
+{
+  double y = -(coeffs[0]*x + coeffs[2]*z + coeffs[3])/(coeffs[1]);
+  return y;
+}
+
+double RosTestNode::computeZ(const vpColVector coeffs, const double x, const double y)
+{
+  double z = -(coeffs[0]*x + coeffs[1]*y + coeffs[3])/(coeffs[2]);
+  return z;
+}
+
+vpHomogeneousMatrix RosTestNode::createTFPlane(const vpColVector coeffs, const double x, const double y, const double z)
+{
+  vpColVector xp;
+  vpColVector yp;
+  vpColVector normal;
+  vpRotationMatrix cRp;
+  vpTranslationVector P0;
+  vpHomogeneousMatrix cMp;
+  geometry_msgs::Pose cMp_msg;
+  tf::Transform transform;
+  static tf::TransformBroadcaster br;
+
+  //Create a normal to the plan
+  normal[0] = -coeffs[0];
+  normal[1] = -coeffs[1];
+  normal[2] = -coeffs[2];
+
+  normal.normalize();
+
+  //Create yp and xp
+  xp[1] = 0;
+  xp[2] = 0.05;
+  xp[0] = RosTestNode::computeX(coeffs, y, z+0.05) - x;
+  xp.normalize();
+  yp = vpColVector::cross(normal,xp);
+
+  //xp = vpColVector::cross(yp,normal);
+
+  //Create the Rotation Matrix
+  cRp[0][0] = xp[0];
+  cRp[1][0] = xp[1];
+  cRp[2][0] = xp[2];
+  cRp[0][1] = yp[0];
+  cRp[1][1] = yp[1];
+  cRp[2][1] = yp[2];
+  cRp[0][2] = normal[0];
+  cRp[1][2] = normal[1];
+  cRp[2][2] = normal[2];
+
+  ROS_INFO("Is the rotation matrix of the plane really a rotation matrix : %d", cRp.isARotationMatrix());
+
+  transform.setOrigin( tf::Vector3(x, y, z) );
+
+  //Calculate the z0
+  double z0 = RosTestNode::computeZ(coeffs, x, y);
+
+  //Create the translation Vector
+  P0 = vpTranslationVector(x, y, z0);
+
+  //Create the homogeneous Matrix
+  cMp = vpHomogeneousMatrix(P0, cRp);
+  cMp_msg = visp_bridge::toGeometryMsgsPose(cMp);
+  tf::Quaternion q;
+  q.setX(cMp_msg.orientation.x);
+  q.setY(cMp_msg.orientation.y);
+  q.setZ(cMp_msg.orientation.z);
+  q.setW(cMp_msg.orientation.w);
+  transform.setRotation(q);
+
+  br.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "softkinetic_camera_rgb_optical_frame", "tf_plane"));
+  return cMp;
+}
+
+vpColVector RosTestNode::getCenterPCL(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+{
+  vpColVector centroid;
+  double sumx = 0, sumy = 0, sumz = 0;
+  for (int i = 0; i < cloud->size(); i++){
+    sumx += cloud->points[i].x;
+    sumy += cloud->points[i].y;
+    sumz += cloud->points[i].z;
+  }
+  centroid[0] = sumx/cloud->size();
+  centroid[1] = sumy/cloud->size();
+  centroid[2] = sumz/cloud->size();
+
+  return centroid;
+}
+
+vpColVector RosTestNode::getDirectionLineODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+{
+  vpMatrix M;
+  vpRowVector m(3);
+  vpColVector centroid = RosTestNode::getCenterPCL(cloud);
+
+  for(unsigned int i=0; i<cloud->size(); i++) {
+    m[0] = cloud->points[i].x - centroid[0];
+    m[1] = cloud->points[i].y - centroid[1];
+    m[2] = cloud->points[i].z - centroid[2];
+    M.stack(m);
+  }
+//      std::cout << "M:\n" << M << std::endl;
+
+  vpMatrix A = M.t() * M;
+
+  vpColVector D;
+  vpMatrix V;
+  A.svd(D, V);
+
+//      std::cout << "A:\n" << A << std::endl;
+//      std::cout << "D:" << D.t() << std::endl;
+//      std::cout << "V:\n" << V << std::endl;
+
+  double largestSv = D[0];
+  unsigned int indexLargestSv = 0 ;
+  for (unsigned int i = 1; i < D.size(); i++) {
+    if ((D[i] > largestSv) ) {
+      largestSv = D[i];
+      indexLargestSv = i;
+    }
+  }
+
+  vpColVector h = V.getCol(indexLargestSv);
+
+  return h;
+}
 void RosTestNode::segColor(const sensor_msgs::PointCloud2::ConstPtr &image)
 {
   // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud

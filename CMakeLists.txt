@@ -50,15 +50,18 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
 )
 
+include_directories(include)
+
 link_directories(${PCL_LIBRARY_DIRS})
 ## Declare a cpp library
-#add_library(test_3d
-#  include/test_3d/vpROSGrabber.h
-#  src/${PROJECT_NAME}/test.cpp
-#)
+add_library(test_3d
+  include/door_handle_detection.h
+  src/door_handle_detection.cpp
+)
 
 ## Declare a cpp executable
 add_executable(test_3d_node src/test.cpp)
+add_executable(door_handle_detection_node src/door_handle_detection.cpp)
 
 
 ## Add cmake target dependencies of the executable/library
@@ -67,6 +70,10 @@ add_executable(test_3d_node src/test.cpp)
 
 ## Specify libraries to link a library or executable target against
  target_link_libraries(test_3d_node
+   ${catkin_LIBRARIES}
+   ${PCL_LIBRARIES}
+ )
+ target_link_libraries(door_handle_detection_node
    ${catkin_LIBRARIES}
    ${PCL_LIBRARIES}
  )
