@@ -86,5 +86,11 @@ protected:
   ros::Publisher door_handle_final_pub;
   ros::Subscriber pcl_frame_sub;
   std::string pclTopicName;
+  bool m_is_previous_initialized;
+  vpColVector m_direction_line_previous;
+  vpColVector m_direction_line_pre_previous;
+  vpColVector m_centroidDH_previous;
+  vpColVector m_centroidDH_pre_previous;
 };
+
 #endif

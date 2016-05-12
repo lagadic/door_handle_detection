@@ -1,7 +1,3 @@
-dots_tracker
+door_handle_detection
 ===========
-Input: image and camera parameters.
-Output:
-- x and y: coordinate of the blobs in the image plane in meters.
-- Z depht of the blobs wrt the camera frame.
-
+A node used to detect a door handle on a plane.

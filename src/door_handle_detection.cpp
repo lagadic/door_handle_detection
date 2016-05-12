@@ -1,5 +1,7 @@
 #include "door_handle_detection.h"
 
+bool m_is_previous_initialized = false;
+
 DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
 {
   n = nh;
@@ -74,7 +76,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
     //getCoeffPlaneWithODR(cloud, xg, yg, zg, normal);
 
     //Creating a cloud with all the points of the door handle
-    cloud_dh = DoorHandleDetectionNode::createPCLBetweenTwoPlanes(cloud, coeffs, 0.04, 0.08);
+    cloud_dh = DoorHandleDetectionNode::createPCLBetweenTwoPlanes(cloud, coeffs, 0.04, 0.07);
 
     //Publish points outside the plan
     cloud_dh->header.frame_id = "softkinetic_camera_rgb_optical_frame";
@@ -91,7 +93,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
       // created RandomSampleConsensus object and compute the appropriated model
       pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_dh));
       pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (model_l);
-      ransac.setDistanceThreshold (.005);
+      ransac.setDistanceThreshold (.002);
       ransac.computeModel();
       ransac.getInliers(inliers2);
       ransac.getModelCoefficients(Coeff_line);
@@ -109,10 +111,34 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
         direction_line[1] = -Coeff_line[4];
         direction_line[2] = -Coeff_line[5];
       }
-//      ROS_INFO("vec1: %lf %lf %lf", direction_line[0], direction_line[1], direction_line[2]);
+      //Publish the pcl of the door handle
+      door_handle_final_pub.publish(*final);
 
       vpColVector centroidDH = DoorHandleDetectionNode::getCenterPCL(final);
 
+      if (!m_is_previous_initialized)
+      {
+        m_direction_line_previous = direction_line;
+        m_direction_line_pre_previous = direction_line;
+        m_centroidDH_previous = centroidDH;
+        m_centroidDH_pre_previous = centroidDH;
+        m_is_previous_initialized = true;
+      }
+      else
+      {
+        if (m_direction_line_previous[0] != direction_line[0])
+        {
+          direction_line = (m_direction_line_pre_previous + m_direction_line_previous + direction_line) / 3;
+          centroidDH = (m_centroidDH_pre_previous + m_centroidDH_previous + centroidDH) / 3;
+          ROS_INFO("vec[t-2]: %lf %lf %lf", m_direction_line_pre_previous[0], m_direction_line_pre_previous[1], m_direction_line_pre_previous[2]);
+          ROS_INFO("vec[t-1]: %lf %lf %lf", m_direction_line_previous[0], m_direction_line_previous[1], m_direction_line_previous[2]);
+          ROS_INFO("vec[t]  : %lf %lf %lf", direction_line[0], direction_line[1], direction_line[2]);
+          m_centroidDH_pre_previous = m_centroidDH_previous;
+          m_centroidDH_previous = centroidDH;
+          m_direction_line_pre_previous = m_direction_line_previous;
+          m_direction_line_previous = direction_line;
+        }
+      }
 //      vpColVector directionLineCoeff(3);
 //      directionLineCoeff = DoorHandleDetectionNode::getCoeffLineWithODR(final);
 
@@ -121,9 +147,6 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
     }
 
   }
-
-  //Publish the convex hull
-  door_handle_final_pub.publish(*final);
 
   //Publish the point clouds of the plan
   pcl_plane_pub.publish(*plane);
@@ -224,7 +247,7 @@ void DoorHandleDetectionNode::getCoeffPlaneWithODR(const pcl::PointCloud<pcl::Po
 
   vpColVector h = V.getCol(indexSmallestSv);
 
-  ROS_INFO_STREAM("Ground true normal vector: " << normal.t() << "\n");
+  ROS_INFO_STREAM("Ground normal vector with the pcl method: " << normal.t() << "\n");
 
   ROS_INFO_STREAM("Estimated normal Vector: " << h.t() << "\n");
 
@@ -405,7 +428,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::createPCLBetweenTwo
       cloud_outside->points.resize (cloud_outside->width * cloud_outside->height);
       cloud_outside->points[width_outside-1].x = xc;
       cloud_outside->points[width_outside-1].y = yc;
-      cloud_outside->points[width_outside-1].z = DoorHandleDetectionNode::computeZ(coefficients, xc, yc) - 0.06;
+      cloud_outside->points[width_outside-1].z = DoorHandleDetectionNode::computeZ(coefficients, xc, yc) - (h_max+h_min)/2;
     }
   }
 
