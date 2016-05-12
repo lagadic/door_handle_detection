@@ -66,11 +66,11 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
     // Copy the inliers of the plane to a new cloud.
     plane = DoorHandleDetectionNode::createPlaneFromInliers(cloud, inliers, coefficients);
 
-    //Create the center of the plan -> pas assez de points avec le convexHull
+    //Create the center of the plane
     vpColVector centroidPlane(3);
     centroidPlane = DoorHandleDetectionNode::getCenterPCL(plane);
 
-    //Create a normal to the plan
+    //Create a tf for the plane
     cMp = DoorHandleDetectionNode::createTFPlane(coeffs, centroidPlane[0], centroidPlane[1], centroidPlane[2]);
 
     //getCoeffPlaneWithODR(cloud, xg, yg, zg, normal);
@@ -78,7 +78,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
     //Creating a cloud with all the points of the door handle
     cloud_dh = DoorHandleDetectionNode::createPCLBetweenTwoPlanes(cloud, coeffs, 0.04, 0.07);
 
-    //Publish points outside the plan
+    //Publish the pcl of the door handle with noise
     cloud_dh->header.frame_id = "softkinetic_camera_rgb_optical_frame";
     pcl_dh_pub.publish(*cloud_dh);
 
@@ -90,7 +90,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
       std::vector<int> inliers2;
       Eigen::VectorXf Coeff_line;
 
-      // created RandomSampleConsensus object and compute the appropriated model
+      //Create a RandomSampleConsensus object and compute the model of a line
       pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_dh));
       pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (model_l);
       ransac.setDistanceThreshold (.002);
@@ -99,17 +99,36 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
       ransac.getModelCoefficients(Coeff_line);
       // copies all inliers of the model computed to another PointCloud
       pcl::copyPointCloud<pcl::PointXYZ>(*cloud_dh, inliers2, *final);
-      if (Coeff_line[3]>0)
+      if (m_dh_right)
       {
-        direction_line[0] = Coeff_line[3];
-        direction_line[1] = Coeff_line[4];
-        direction_line[2] = Coeff_line[5];
+        if (Coeff_line[3]>0)
+        {
+          direction_line[0] = Coeff_line[3];
+          direction_line[1] = Coeff_line[4];
+          direction_line[2] = Coeff_line[5];
+        }
+        else
+        {
+          direction_line[0] = -Coeff_line[3];
+          direction_line[1] = -Coeff_line[4];
+          direction_line[2] = -Coeff_line[5];
+        }
       }
       else
       {
-        direction_line[0] = -Coeff_line[3];
-        direction_line[1] = -Coeff_line[4];
-        direction_line[2] = -Coeff_line[5];
+        if (Coeff_line[3]>0)
+        {
+          direction_line[0] = -Coeff_line[3];
+          direction_line[1] = -Coeff_line[4];
+          direction_line[2] = -Coeff_line[5];
+        }
+        else
+        {
+          direction_line[0] = Coeff_line[3];
+          direction_line[1] = Coeff_line[4];
+          direction_line[2] = Coeff_line[5];
+        }
+
       }
       //Publish the pcl of the door handle
       door_handle_final_pub.publish(*final);
@@ -129,16 +148,20 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
         if (m_direction_line_previous[0] != direction_line[0])
         {
           direction_line = (m_direction_line_pre_previous + m_direction_line_previous + direction_line) / 3;
-          centroidDH = (m_centroidDH_pre_previous + m_centroidDH_previous + centroidDH) / 3;
           ROS_INFO("vec[t-2]: %lf %lf %lf", m_direction_line_pre_previous[0], m_direction_line_pre_previous[1], m_direction_line_pre_previous[2]);
           ROS_INFO("vec[t-1]: %lf %lf %lf", m_direction_line_previous[0], m_direction_line_previous[1], m_direction_line_previous[2]);
           ROS_INFO("vec[t]  : %lf %lf %lf", direction_line[0], direction_line[1], direction_line[2]);
-          m_centroidDH_pre_previous = m_centroidDH_previous;
-          m_centroidDH_previous = centroidDH;
           m_direction_line_pre_previous = m_direction_line_previous;
           m_direction_line_previous = direction_line;
         }
+        if (m_centroidDH_previous[0] != centroidDH[0])
+        {
+          centroidDH = (m_centroidDH_pre_previous + m_centroidDH_previous + centroidDH) / 3;
+          m_centroidDH_pre_previous = m_centroidDH_previous;
+          m_centroidDH_previous = centroidDH;
+        }
       }
+
 //      vpColVector directionLineCoeff(3);
 //      directionLineCoeff = DoorHandleDetectionNode::getCoeffLineWithODR(final);
 
@@ -165,11 +188,17 @@ void DoorHandleDetectionNode::createTFLine(const vpColVector coeffs, vpColVector
   tf::Transform transformdh;
   static tf::TransformBroadcaster br;
   vpColVector direction_line(3);
+  vpColVector centroid;
+  vpColVector centroidBorder;
+
+  centroid.stack(x);
+  centroid.stack(y);
+  centroid.stack(z);
+  centroid.stack(1);
 
   direction_line[0]=coeffs[0];
   direction_line[1]=coeffs[1];
   direction_line[2]=coeffs[2];
-
   direction_line.normalize();
 
   vpColVector y_dh(3);
@@ -186,8 +215,6 @@ void DoorHandleDetectionNode::createTFLine(const vpColVector coeffs, vpColVector
   cRdh[1][2] = normal[1];
   cRdh[2][2] = normal[2];
 
-  transformdh.setOrigin( tf::Vector3(x, y, z ));
-
   //Create the translation Vector
   Pdh = vpTranslationVector(x, y, z);
 
@@ -195,13 +222,16 @@ void DoorHandleDetectionNode::createTFLine(const vpColVector coeffs, vpColVector
   cMdh = vpHomogeneousMatrix(Pdh, cRdh);
   cMdh_msg = visp_bridge::toGeometryMsgsPose(cMdh);
 
+  centroidBorder = cMdh.inverse() * centroid;
+  centroidBorder[0] = centroidBorder[0] - 0.05;
+  centroidBorder = cMdh * centroidBorder;
+
+  transformdh.setOrigin( tf::Vector3(centroidBorder[0], centroidBorder[1], centroidBorder[2] ));
+
   pRdh = cRp.inverse() * cRdh;
   pMdh = vpHomogeneousMatrix(Pdh, pRdh);
 
   pMdh_msg = visp_bridge::toGeometryMsgsPose(pMdh);
-
-  vpQuaternionVector q = vpQuaternionVector( pMdh.getRotationMatrix() );
-
 
   tf::Quaternion qdh;
   qdh.setX(cMdh_msg.orientation.x);
