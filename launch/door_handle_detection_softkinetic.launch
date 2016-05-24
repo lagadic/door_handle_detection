@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!--
+Demo launch file to run single softkinetic camera in stand alone (no other /tf) setup with Rviz
+The arguments given are the device indices of the cameras determined by the DepthSense deamon.
+-->
+<launch>
+  <node pkg="door_handle_detection" type="door_handle_detection_node" name="door_handle_detection">
+    <param name="m_dh_right" type="bool" value="true"/>
+    <param name="m_soft" type="bool" value="true"/>
+    <param name="m_pclTopicName" type="string" value="/softkinetic_camera/depth/points"/>
+    <param name="m_cameraRGBTopicName" type="string" value="/softkinetic_camera/rgb/camera_info"/>
+    <param name="m_cameraDepthTopicName" type="string" value="/softkinetic_camera/depth/camera_info"/>
+    <param name="m_imageTopicName" type="string" value="/softkinetic_camera/rgb/image_color"/>
+  </node>
+  
+</launch>

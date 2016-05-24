@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <package>
-  <name>test_3d</name>
+  <name>door_handle_detection</name>
   <version>0.0.1</version>
-  <description>My first package</description>
+  <description>Door handle detection</description>
 
-  <maintainer email="benoit.heintz@irisa.fr">zareik</maintainer>
+  <maintainer email="benoit.heintz@irisa.fr">bheintz</maintainer>
 
   <license>TODO</license>
 

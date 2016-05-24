@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(test_3d)
+project(door_handle_detection)
 
 find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
@@ -54,7 +54,7 @@ include_directories(include)
 
 link_directories(${PCL_LIBRARY_DIRS})
 ## Declare a cpp library
-add_library(test_3d
+add_library(door_handle_detection
   include/door_handle_detection.h
   src/door_handle_detection.cpp
 )
@@ -62,7 +62,7 @@ add_library(test_3d
 ## Declare a cpp executable
 add_executable(test_3d_node src/test.cpp)
 add_executable(door_handle_detection_node src/door_handle_detection.cpp)
-
+add_executable(display_node src/display.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
@@ -74,6 +74,10 @@ add_executable(door_handle_detection_node src/door_handle_detection.cpp)
    ${PCL_LIBRARIES}
  )
  target_link_libraries(door_handle_detection_node
+   ${catkin_LIBRARIES}
+   ${PCL_LIBRARIES}
+ )
+ target_link_libraries(display_node
    ${catkin_LIBRARIES}
    ${PCL_LIBRARIES}
  )
