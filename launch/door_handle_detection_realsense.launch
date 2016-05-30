@@ -13,6 +13,7 @@ The arguments given are the device indices of the cameras determined by the Dept
     <param name="m_cameraRGBTopicName" type="string" value="/camera/rgb/camera_info"/>
     <param name="m_cameraDepthTopicName" type="string" value="/camera/depth/camera_info"/>
     <param name="m_imageTopicName" type="string" value="/camera/rgb/image_raw"/>
+    <param name="debug" type="bool" value="false"/>
   </node>
 
   

@@ -1,12 +1,28 @@
 #include "door_handle_detection.h"
 
+
 DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
 {
   n = nh;
 
   m_img_.init(480,640);
+  m_img_2.init(480,640);
   m_img_mono.init(480,640);
   ROS_INFO("Launch Test ros node");
+
+  m_Z_min = 0.5;
+  m_Z_max = 0.5;
+  m_extrinsic_param_are_initialized = false;
+  m_useful_cloud_is_initialized = false;
+  m_is_previous_initialized = false;
+  m_tracking_is_initialized = false;
+  m_is_door_handle_present = false;
+  m_plane_is_initialized =false;
+  m_disp_is_initialized = false;
+  m_cam_is_initialized = false;
+  m_tracking_works = false;
+  m_bbox_is_fixed = false;
+
 
   n.param<std::string>("m_image_topic_name", m_imageTopicName, "/camera/rgb/image_raw");
   n.param<std::string>("m_pclTopicName", m_pclTopicName, "/softkinetic_camera/depth/points");
@@ -19,23 +35,19 @@ DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
     m_parent_tf = "camera_depth_optical_frame";
 //  n.getParam("m_parent_tf", m_parent_tf);
   n.param("m_dh_right", m_dh_right, true);
-  n.param("m_is_previous_initialized", m_is_previous_initialized, false);
+  n.param("debug", debug, false);
   n.param("m_lenght_dh",m_lenght_dh, 0.1);
   n.param("m_height_dh", m_height_dh, 0.055);
-  n.param("m_is_door_handle_present", m_is_door_handle_present, false);
-  n.param("m_cam_is_initialized", m_cam_is_initialized, false);
-  n.param("m_plane_is_initialized", m_plane_is_initialized, false);
-  n.param("m_useful_cloud_is_initialized", m_plane_is_initialized, false);
-  n.param("m_disp_is_initialized", m_disp_is_initialized, false);
-  n.param("m_extrinsic_param_are_initialized", m_extrinsic_param_are_initialized, false);
-  n.param("m_bbox_fixed", m_bbox_is_fixed, false);
-  n.param("m_Z_min", m_Z_min, 0.5);
-  n.param("m_Z_max", m_Z_max, 0.5);
+//  n.param("m_plane_is_initialized", m_plane_is_initialized, false);
+//  n.param("m_Z_max", m_Z_center, 0.8);
   // subscribe to services
   ROS_INFO("Beautiful weather, isn't it ?");
   homogeneous_matrix_pub = n.advertise< geometry_msgs::Pose >("dh_tf", 1);
-  pcl_plane_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_Plane", 1);
-  pcl_dh_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_Outside", 1);
+  if (debug)
+  {
+    pcl_plane_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_Plane", 1);
+    pcl_dh_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_Outside", 1);
+  }
   door_handle_final_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("PCL_DH", 1);
   cam_rgb_info_sub = n.subscribe( m_cameraRGBTopicName, 1, (boost::function < void(const sensor_msgs::CameraInfo::ConstPtr&)>) boost::bind( &DoorHandleDetectionNode::setupCameraParameters, this, _1 ));
   cam_depth_info_sub = n.subscribe( m_cameraDepthTopicName, 1, (boost::function < void(const sensor_msgs::CameraInfo::ConstPtr&)>) boost::bind( &DoorHandleDetectionNode::getExtrinsicParameters, this, _1 ));
@@ -46,7 +58,11 @@ DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
 DoorHandleDetectionNode::~DoorHandleDetectionNode()
 {
   if (m_disp_is_initialized)
+  {
     delete m_disp;
+    delete m_disp2;
+    delete m_disp_mono;
+  }
 
 }
 
@@ -63,10 +79,9 @@ void DoorHandleDetectionNode::spin()
 void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::ConstPtr &image)
 {
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_sized(new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr plane(new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_dh(new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr final (new pcl::PointCloud<pcl::PointXYZ>);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_bbox(new pcl::PointCloud<pcl::PointXYZ>);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_sandwich(new pcl::PointCloud<pcl::PointXYZ>);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_handle (new pcl::PointCloud<pcl::PointXYZ>);
   vpColVector direction_line(3);
   vpColVector normal(3);
   vpRotationMatrix cRp;
@@ -74,39 +89,39 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
   vpHomogeneousMatrix cMdh;
   geometry_msgs::Pose cMdh_msg;
   vpColVector coeffs;
+  struct inliersAndCoefficients plane_variables;
+  pcl::PointCloud<pcl::PointXYZ>::Ptr plane(new pcl::PointCloud<pcl::PointXYZ>);
+//  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_plane(new pcl::PointCloud<pcl::PointXYZ>);
 
   // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud
   pcl::fromROSMsg (*image, *cloud);
 
-  if(m_bbox_is_fixed)
+  if(m_cam_is_initialized)
   {
-//    if (!m_plane_is_initialized)
-    cloud_sized = DoorHandleDetectionNode::getOnlyUsefulCloud(cloud);
-//    coeffs = DoorHandleDetectionNode::getCoeffPlaneWithODR(cloud, xg, yg, zg, normal);
+    cloud_bbox = DoorHandleDetectionNode::getOnlyUsefulHandle(cloud);
 
-    pcl::ModelCoefficients::Ptr coefficients = DoorHandleDetectionNode::getPlaneCoefficients(cloud);
-//    if (!m_useful_cloud_is_initialized)
-//    {
-//      cloud_sized = DoorHandleDetectionNode::getOnlyUsefulCloud(cloud);
-//      m_useful_cloud_is_initialized = true;
-//    }
-//    coefficients = DoorHandleDetectionNode::getPlaneCoefficients(cloud_sized);
-    coeffs.stack(coefficients->values[0]);
-    coeffs.stack(coefficients->values[1]);
-    coeffs.stack(coefficients->values[2]);
-    coeffs.stack(coefficients->values[3]);
+    plane_variables = DoorHandleDetectionNode::getPlaneInliersAndCoefficients(cloud);
+    coeffs.stack(plane_variables.coefficients->values[0]);
+    coeffs.stack(plane_variables.coefficients->values[1]);
+    coeffs.stack(plane_variables.coefficients->values[2]);
+    coeffs.stack(plane_variables.coefficients->values[3]);
 
     normal[0] = -coeffs[0];
     normal[1] = -coeffs[1];
     normal[2] = -coeffs[2];
 
-    pcl::PointIndices::Ptr inliers = DoorHandleDetectionNode::getPlaneInliers(cloud);
-    if (inliers->indices.size() < 100)
+    if (plane_variables.inliers->indices.size() < 100)
+    {
       std::cout << "Could not find a plane in the scene." << std::endl;
+      vpDisplay::displayText(m_img_mono, 60, 5, "No plane detected", vpColor::red);
+      vpDisplay::flush(m_img_mono);
+    }
     else
     {
+      if (debug)
+      {
       // Copy the inliers of the plane to a new cloud.
-      plane = DoorHandleDetectionNode::createPlaneFromInliers(cloud, inliers, coefficients);
+      plane = DoorHandleDetectionNode::createPlaneFromInliers(cloud, plane_variables.inliers, plane_variables.coefficients);
 
       //Create the center of the plane
       vpColVector centroidPlane(3);
@@ -114,16 +129,22 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 
       //Create a tf for the plane
       cMp = DoorHandleDetectionNode::createTFPlane(coeffs, centroidPlane[0], centroidPlane[1], centroidPlane[2]);
+      }
 
       //Creating a cloud with all the points of the door handle
-      cloud_dh = DoorHandleDetectionNode::createPCLBetweenTwoPlanes(cloud_sized, coeffs, m_height_dh);
+      cloud_sandwich = DoorHandleDetectionNode::createPCLBetweenTwoPlanes(cloud_bbox, coeffs, m_height_dh);
 
+      if (debug)
+      {
       //Publish the pcl of the door handle with noise
-      cloud_dh->header.frame_id = m_parent_tf;
-      pcl_dh_pub.publish(*cloud_dh);
+        cloud_sandwich->header.frame_id = m_parent_tf;
+        pcl_dh_pub.publish(*cloud_sandwich);
+      }
 
-      if (cloud_dh->size()<30){
+      if (cloud_sandwich->size()<30){
         m_is_door_handle_present = false;
+        vpDisplay::displayText(m_img_mono, 60, 5, "No door Handle detected", vpColor::red);
+        vpDisplay::flush(m_img_mono);
         ROS_INFO("No door handle detected : %d", m_is_door_handle_present);
       }
       else
@@ -133,15 +154,14 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
         Eigen::VectorXf Coeff_line;
 
         //Create a RandomSampleConsensus object and compute the model of a line
-        pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_dh));
+        pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_sandwich));
         pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (model_l);
-        ransac.setDistanceThreshold (.002);
+        ransac.setDistanceThreshold (.001);
         ransac.computeModel();
-        //      ROS_INFO("variance = %lf", variance);
         ransac.getInliers(inliers2);
         ransac.getModelCoefficients(Coeff_line);
         // copies all inliers of the model computed to another PointCloud
-        pcl::copyPointCloud<pcl::PointXYZ>(*cloud_dh, inliers2, *final);
+        pcl::copyPointCloud<pcl::PointXYZ>(*cloud_sandwich, inliers2, *cloud_handle);
         if (m_dh_right)
         {
           if (Coeff_line[3]>0)
@@ -174,12 +194,12 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 
         }
         //Publish the pcl of the door handle
-        final->header.frame_id = m_parent_tf;
-        door_handle_final_pub.publish(*final);
+        cloud_handle->header.frame_id = m_parent_tf;
+        door_handle_final_pub.publish(*cloud_handle);
 
-        //DoorHandleDetectionNode::getImageVisp(final);
+        DoorHandleDetectionNode::getImageVisp(cloud_sandwich);
 
-        vpColVector centroidDH = DoorHandleDetectionNode::getCenterPCL(final);
+        vpColVector centroidDH = DoorHandleDetectionNode::getCenterPCL(cloud_handle);
 
         if (!m_is_previous_initialized)
         {
@@ -209,7 +229,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
         }
 
         //      vpColVector directionLineCoeff(3);
-        //      directionLineCoeff = DoorHandleDetectionNode::getCoeffLineWithODR(final);
+        //      directionLineCoeff = DoorHandleDetectionNode::getCoeffLineWithODR(cloud_handle);
 
         //Create the door handle tf
         m_dMh = DoorHandleDetectionNode::createTFLine(direction_line, normal, centroidDH[0], centroidDH[1], centroidDH[2], cRp, cMp);
@@ -226,9 +246,12 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 
     }
 
-    //Publish the point clouds of the plan
-    plane->header.frame_id = m_parent_tf;
-    pcl_plane_pub.publish(*plane);
+    if (debug)
+    {
+      //Publish the point clouds of the plan
+      plane->header.frame_id = m_parent_tf;
+      pcl_plane_pub.publish(*plane);
+    }
   }
 
 }
@@ -283,7 +306,7 @@ vpHomogeneousMatrix DoorHandleDetectionNode::createTFLine(const vpColVector coef
   cMdh_msg = visp_bridge::toGeometryMsgsPose(cMdh);
 
   centroidBorder = cMdh.inverse() * centroid;
-  centroidBorder[0] = centroidBorder[0] - (m_lenght_dh / 2) + 0.005;
+  centroidBorder[0] = centroidBorder[0] - (m_lenght_dh / 2) + 0.015;
   centroidBorder = cMdh * centroidBorder;
 
   transformdh.setOrigin( tf::Vector3(centroidBorder[0], centroidBorder[1], centroidBorder[2] ));
@@ -349,15 +372,16 @@ vpColVector DoorHandleDetectionNode::getCoeffPlaneWithODR(const pcl::PointCloud<
   return h;
 }
 
-pcl::ModelCoefficients::Ptr DoorHandleDetectionNode::getPlaneCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+inliersAndCoefficients DoorHandleDetectionNode::getPlaneInliersAndCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
+  struct inliersAndCoefficients plane;
   pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients ());
   pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
   pcl::SACSegmentation<pcl::PointXYZ> seg;
   seg.setOptimizeCoefficients (true);
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
-  seg.setDistanceThreshold (0.1);
+  seg.setDistanceThreshold (0.05);
   //Create the inliers and coefficients for the biggest plan found
   seg.setInputCloud (cloud);
   seg.segment (*inliers, *coefficients);
@@ -365,13 +389,18 @@ pcl::ModelCoefficients::Ptr DoorHandleDetectionNode::getPlaneCoefficients(const 
 //  double Z_min, Z_max;
 //  if(!m_plane_is_initialized)
 //  {
-    m_Z_min = - (coefficients->values[3]) / (coefficients->values[2] + coefficients->values[0] * m_x_min + coefficients->values[1] * m_y_min);
-    m_Z_max = - (coefficients->values[3]) / (coefficients->values[2] + coefficients->values[0] * m_x_max + coefficients->values[1] * m_y_max);
+    m_Z_min = - (coefficients->values[3]) / (coefficients->values[2] + coefficients->values[0] * m_x_min + coefficients->values[1] * m_y_min) + m_height_dh;
+    m_Z_max = - (coefficients->values[3]) / (coefficients->values[2] + coefficients->values[0] * m_x_max + coefficients->values[1] * m_y_max) + m_height_dh;
+    m_Z_min -= m_extrinsicParam[2];
+    m_Z_max -= m_extrinsicParam[2];
     m_plane_is_initialized = true;
 //  }
-  ROS_INFO("z_min = %lf , z_max = %lf", m_Z_min, m_Z_max);
+//  ROS_INFO("z_min = %lf , z_max = %lf", m_Z_min, m_Z_max);
 
-  return coefficients;
+  plane.coefficients = coefficients;
+  plane.inliers = inliers;
+
+  return plane;
 }
 
 pcl::PointIndices::Ptr DoorHandleDetectionNode::getPlaneInliers(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
@@ -382,7 +411,7 @@ pcl::PointIndices::Ptr DoorHandleDetectionNode::getPlaneInliers(const pcl::Point
   seg.setOptimizeCoefficients (true);
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
-  seg.setDistanceThreshold (0.1);
+  seg.setDistanceThreshold (0.05);
   //Create the inliers and coefficients for the biggest plan found
   seg.setInputCloud (cloud);
   seg.segment (*inliers, *coefficients);
@@ -524,8 +553,8 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::createPCLBetweenTwo
     xc = cloud->points[i].x;
     yc = cloud->points[i].y;
     zc = cloud->points[i].z;
-    z_min = DoorHandleDetectionNode::computeZ(coefficients, xc, yc) - (height_dh - 0.03);
-    z_max = DoorHandleDetectionNode::computeZ(coefficients, xc, yc) - (height_dh + 0.03);
+    z_min = DoorHandleDetectionNode::computeZ(coefficients, xc, yc) - (height_dh - 0.025);
+    z_max = DoorHandleDetectionNode::computeZ(coefficients, xc, yc) - (height_dh + 0.025);
     if (zc < z_min && zc > z_max )
     {
       width_outside++;
@@ -551,6 +580,12 @@ void DoorHandleDetectionNode::setupCameraParameters(const sensor_msgs::CameraInf
 //    if (p.parse(m_cam, "camera.xml", "Camera", projModel,640,480) != vpXmlParserCamera::SEQUENCE_OK) {
 //      std::cout << "Cannot found Camera" << std::endl;
 //    }
+    vpPixelMeterConversion::convertPoint(m_cam_rgb, 0, 0, m_x_min, m_y_min);
+    vpPixelMeterConversion::convertPoint(m_cam_rgb, 640, 480, m_x_max, m_y_max);
+    m_x_min -= (m_extrinsicParam[0] );
+    m_x_max -= (m_extrinsicParam[0] );
+    m_y_min -= (m_extrinsicParam[1] );
+    m_y_max -= (m_extrinsicParam[1] );
     ROS_INFO_STREAM("Camera param  = \n" << m_cam_rgb);
 
     m_cam_is_initialized = true;
@@ -574,13 +609,19 @@ void DoorHandleDetectionNode::initDisplayVisp()
 {
   if (! m_disp_is_initialized) {
     //init graphical interface
-    m_disp = new vpDisplayX();
-    m_disp->init(m_img_);
-    m_disp->setTitle("Image viewer");
+    m_disp = new vpDisplayX(m_img_, 750, 0, "Image viewer");
+//    m_disp->init(m_img_);
+//    m_disp->setTitle("Image viewer");
     vpDisplay::flush(m_img_);
     vpDisplay::display(m_img_);
     ROS_INFO("Initialisation done");
     vpDisplay::flush(m_img_);
+
+//    m_disp2 = new vpDisplayX(m_img_2, 1500, 0, "Image viewer final");
+//    vpDisplay::flush(m_img_2);
+//    vpDisplay::display(m_img_2);
+//    ROS_INFO("Initialisation done");
+//    vpDisplay::flush(m_img_2);
 
     m_disp_mono = new vpDisplayX();
     m_disp_mono->init(m_img_mono);
@@ -600,57 +641,88 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
   initDisplayVisp();
   vpMouseButton::vpMouseButtonType button;
   vpImagePoint pointClicked;
-  vpImagePoint bottomRightHandle;
-  vpImagePoint topLeftHandle;
-  vpImagePoint bottomRightPlane;
-  vpImagePoint topLeftPlane;
+  vpImagePoint bottomRightBBoxHandle;
+  vpImagePoint topLeftBBoxHandle;
+  double x_center, y_center, X_center, Y_center, Z_center;
   m_img_mono = visp_bridge::toVispImage(*image);
 
   vpDisplay::display(m_img_mono);
-  vpDisplay::displayText(m_img_mono, 15, 10, "Right Click to select a region for the detection of the door handle, Middle click to quit,", vpColor::red);
-  vpDisplay::displayText(m_img_mono, 30, 10, "Left Click to delete the bounding box.", vpColor::red);
+  vpDisplay::displayText(m_img_mono, 15, 5, "Right click to select a region for the detection of the door handle,", vpColor::red);
+  vpDisplay::displayText(m_img_mono, 30, 5, "Middle click to delete the bounding box,", vpColor::red);
+  vpDisplay::displayText(m_img_mono, 45, 5, "Left click to quit.", vpColor::red);
 //  vpDisplay::flush(m_img_mono);
   if ( vpDisplay::getClick( m_img_mono, pointClicked, button, false) )
   {
     if (button == vpMouseButton::button1)
     {
+      m_pointPoseHandle = pointClicked;
       m_bbox_is_fixed = true;
-      bottomRightHandle.set_uv( pointClicked.get_u() + 150, pointClicked.get_v() + 80 );
-      topLeftHandle.set_uv( pointClicked.get_u() - 50, pointClicked.get_v() - 80);
-      bottomRightPlane.set_uv( pointClicked.get_u() + 400, pointClicked.get_v() + 400 );
-      topLeftPlane.set_uv( pointClicked.get_u() - 400, pointClicked.get_v() - 400);
+      if (m_dh_right)
+      {
+        bottomRightBBoxHandle.set_uv( pointClicked.get_u() + 150, pointClicked.get_v() + 100 );
+        topLeftBBoxHandle.set_uv( pointClicked.get_u() - 50, pointClicked.get_v() - 100);
+      }
+      else
+      {
+        bottomRightBBoxHandle.set_uv( pointClicked.get_u() + 50, pointClicked.get_v() + 100 );
+        topLeftBBoxHandle.set_uv( pointClicked.get_u() - 150, pointClicked.get_v() - 100);
+      }
 //      vpDisplay::displayPoint(m_img_mono, bottomRight, vpColor::red);
 //      vpDisplay::displayPoint(m_img_mono, topLeft, vpColor::red);
-      m_bboxplane.setTopLeft(topLeftPlane);
-      m_bboxplane.setBottomRight(bottomRightPlane);
-      m_bboxhandle.setTopLeft(topLeftHandle);
-      m_bboxhandle.setBottomRight(bottomRightHandle);
-      vpPixelMeterConversion::convertPoint(m_cam_rgb, bottomRightHandle, m_x_max, m_y_max);
-      vpPixelMeterConversion::convertPoint(m_cam_rgb, topLeftHandle, m_x_min, m_y_min);
-      m_x_min -= (m_extrinsicParam[0] );
-      m_x_max -= (m_extrinsicParam[0] );
-      m_y_min -= (m_extrinsicParam[1] );
-      m_y_max -= (m_extrinsicParam[1] );
+      m_bboxdetectionhandle.setTopLeft(topLeftBBoxHandle);
+      m_bboxdetectionhandle.setBottomRight(bottomRightBBoxHandle);
+      if ( !m_tracking_works)
+      {
+        vpPixelMeterConversion::convertPoint(m_cam_rgb, bottomRightBBoxHandle, m_x_max, m_y_max);
+        vpPixelMeterConversion::convertPoint(m_cam_rgb, topLeftBBoxHandle, m_x_min, m_y_min);
+        //      vpPixelMeterConversion::convertPoint(m_cam_rgb, pointClicked, x_center, y_center);
+        m_x_min -= (m_extrinsicParam[0] );
+        m_x_max -= (m_extrinsicParam[0] );
+        m_y_min -= (m_extrinsicParam[1] );
+        m_y_max -= (m_extrinsicParam[1] );
+      }
+//      m_X_center = (x_center - m_extrinsicParam[0]) * m_Z_center;
+//      m_Y_center = (y_center - m_extrinsicParam[1]) * m_Z_center;
       ROS_INFO_STREAM("Coordinates Top Left  : " << m_x_min << ", " << m_y_min << "\nCoordinates Bottom Right : " << m_x_max << ", " << m_y_max << "\n");
 
-//      m_bbox.setBottom(pointClicked.get_v() + 80);
-//      m_bbox.setTop(pointClicked.get_v() - 80);
-//      m_bbox.setLeft(pointClicked.get_u() - 80);
-//      m_bbox.setRight(pointClicked.get_u() + 160);
     }
     else if(button == vpMouseButton::button2)
-      ros::shutdown();
-    else if(button == vpMouseButton::button3)
     {
       m_bbox_is_fixed = false;
       m_plane_is_initialized = false;
+      m_tracking_is_initialized = false;
+      m_tracking_works = false;
     }
+    else if(button == vpMouseButton::button3)
+      ros::shutdown();
+
   }
-  if (m_bbox_is_fixed)
+  if ( m_is_door_handle_present )
   {
-    vpDisplay::displayRectangle(m_img_mono, m_bboxhandle, vpColor::green);
+    X_center = m_cMh[0][3];
+    Y_center = m_cMh[1][3];
+    Z_center = m_cMh[2][3];
+    x_center = X_center / Z_center;
+    y_center = Y_center / Z_center;
+    vpMeterPixelConversion::convertPoint(m_cam_rgb, x_center, y_center, m_pointPoseHandle);
+    if (m_dh_right)
+    {
+      bottomRightBBoxHandle.set_uv( m_pointPoseHandle.get_u() + 150, m_pointPoseHandle.get_v() + 80 );
+      topLeftBBoxHandle.set_uv( m_pointPoseHandle.get_u() - 50, m_pointPoseHandle.get_v() - 80);
+    }
+    else
+    {
+      bottomRightBBoxHandle.set_uv( m_pointPoseHandle.get_u() + 50, m_pointPoseHandle.get_v() + 80 );
+      topLeftBBoxHandle.set_uv( m_pointPoseHandle.get_u() - 150, m_pointPoseHandle.get_v() - 80);
+    }
+    m_bboxdetectionhandle.setBottomRight(bottomRightBBoxHandle);
+    m_bboxdetectionhandle.setTopLeft(topLeftBBoxHandle);
+  }
+  if ( m_bbox_is_fixed )
+  {
+    vpDisplay::displayRectangle(m_img_mono, m_bboxdetectionhandle, vpColor::green);
+    vpDisplay::displayRectangle(m_img_mono, m_bboxhandle, vpColor::yellow);
     vpDisplay::displayFrame(m_img_mono, m_cMh, m_cam_rgb, 0.1);
-//    vpDisplay::displayRectangle(m_img_mono, m_bboxplane, vpColor::red);
   }
   vpDisplay::flush(m_img_mono);
 
@@ -659,65 +731,177 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
 void DoorHandleDetectionNode::getImageVisp(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
   m_img_ = 0;
+//  m_img_2 = 0;
   double X,Y,Z,x,y,u,v;
   int taille_avant, taille_apres = 0;
+  vpImagePoint bottomRightBBoxHandle;
+  vpImagePoint topLeftBBoxHandle;
   vpMouseButton::vpMouseButtonType button;
-  vpImagePoint pointHandle;
-  std::vector<vpImagePoint> allPointsHandle;
+  vpImagePoint pointTest;
+  vpPolygon polygonTest;
+//  std::vector<vpImagePoint> allPointsHandle;
+//  m_blob.setGraphics(true);
+//  m_blob.setGraphicsThickness(2);
+  m_blob_2.setGraphics(true);
+  m_blob_2.setGraphicsThickness(1);
+  m_blob_2.setEllipsoidShapePrecision(0.);
+  m_blob_2.setGrayLevelMin(170);
+  m_blob_2.setGrayLevelMax(255);
 
   taille_avant = cloud->size();
   for(int i = 0; i < cloud->size(); i++ ){
-    X = cloud->points[i].x;
-    Y = cloud->points[i].y;
-    Z = cloud->points[i].z;
+    X = cloud->points[i].x + m_extrinsicParam[0] ;
+    Y = cloud->points[i].y + m_extrinsicParam[1] ;
+    Z = cloud->points[i].z + m_extrinsicParam[2] ;
     x = X/Z;
     y = Y/Z;
 
     vpMeterPixelConversion::convertPoint(m_cam_rgb, x, y, u, v);
 
     if(u < m_img_.getWidth() && v < m_img_.getHeight())
-      m_img_.bitmap[ int(v) * m_img_.getWidth() + int(u) ] = 255;
+    {
+      m_img_.bitmap[ int(v) * m_img_.getWidth() + int(u) ] = 250;
+//      m_img_2.bitmap[ int(v) * m_img_.getWidth() + int(u) ] = 250;
+    }
   }
-//  vpImageMorphology::dilatation(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_8);
-//  vpImageMorphology::dilatation(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
-//  vpImageMorphology::erosion(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
-//  vpImageMorphology::erosion(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
-//  vpImageMorphology::erosion(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
+  vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
+  vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
+  vpImageMorphology::erosion(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
+  vpImageMorphology::erosion(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
+  vpImageMorphology::erosion(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
+  vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_8);
 //  vpImageMorphology::dilatation(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
 
   vpDisplay::display(m_img_);
-
-  for(int v = 0; v < m_img_.getHeight() ; v++)
-  {
-    for(int u = 0; u < m_img_.getWidth(); u++ )
+  try {
+    if ( m_is_door_handle_present )
     {
-      if ( m_img_.bitmap[v * m_img_.getWidth() + u] > 250){
-        pointHandle.set_uv(u,v);
-        taille_apres ++;
-        allPointsHandle.push_back(pointHandle);
-//        vpPixelMeterConversion::convertPoint(m_cam, v, u, x, y);
+      if ( !m_tracking_is_initialized )
+      {
+//        m_blob.initTracking(m_img_, m_pointPoseHandle);
+        m_blob_2.initTracking(m_img_, m_pointPoseHandle);
+        ROS_INFO_STREAM( "Blob from init :" << m_blob_2.getCog() << " Gray min : " << m_blob_2.getGrayLevelMin() << " Gray max : " << m_blob_2.getGrayLevelMax() << " Precision : " << m_blob_2.getGrayLevelPrecision());
+        m_tracking_is_initialized = true;
+      }
+      else
+      {
+//        m_blob.track(m_img_);
+        m_blob_2.track(m_img_);
+        m_bboxhandle = m_blob_2.getBBox();
+        m_tracking_works = true;
+        m_bbox_is_fixed = true;
+        ROS_INFO_STREAM( "Blob tracking " << m_blob_2.getCog() << " Gray min : " << m_blob_2.getGrayLevelMin() << " Gray max : " << m_blob_2.getGrayLevelMax() << " Precision : " << m_blob_2.getGrayLevelPrecision());
       }
     }
   }
-
-  if (!m_bbox_is_fixed && allPointsHandle.size() > 10){
-    m_bboxhandle = vpImagePoint::getBBox(allPointsHandle);
+  catch(...) {
+    m_tracking_is_initialized = false;
+    m_tracking_works = false;
   }
-  vpDisplay::displayRectangle(m_img_, m_bboxhandle, vpColor::green);
-  vpDisplay::flush(m_img_);
-  ROS_INFO("Taille cloud = %d     Nombre de points detectes = %d", taille_avant, taille_apres);
-  if(vpDisplay::getClick(m_img_, button, false)) {
-    if (button == vpMouseButton::button1)
-      m_bbox_is_fixed = true;
-    else if(button == vpMouseButton::button2)
+
+
+  if ( m_tracking_works )
+  {
+    bottomRightBBoxHandle.set_uv( m_bboxhandle.getBottomRight().get_u() + 10, m_bboxhandle.getBottomRight().get_v() + 10 );
+    topLeftBBoxHandle.set_uv( m_bboxhandle.getTopLeft().get_u() - 20, m_bboxhandle.getTopLeft().get_v() - 20);
+
+//    polygonTest = m_blob.getPolygon();
+    vpPixelMeterConversion::convertPoint(m_cam_rgb, bottomRightBBoxHandle, m_x_max, m_y_max);
+    vpPixelMeterConversion::convertPoint(m_cam_rgb, topLeftBBoxHandle, m_x_min, m_y_min);
+//      vpPixelMeterConversion::convertPoint(m_cam_rgb, pointClicked, x_center, y_center);
+    m_x_min -= (m_extrinsicParam[0] );
+    m_x_max -= (m_extrinsicParam[0] );
+    m_y_min -= (m_extrinsicParam[1] );
+    m_y_max -= (m_extrinsicParam[1] );
+
+//    for(int v = 0; v < m_img_.getHeight() ; v++)
+//    {
+//      for(int u = 0; u < m_img_.getWidth(); u++ )
+//      {
+//        pointTest.set_uv(u,v);
+////        if (polygonTest.isInside(pointTest))
+////          m_img_2.bitmap[ v * m_img_.getWidth() + u ] = 128;
+//        if ( m_img_.bitmap[ v * m_img_.getWidth() + u ] > 170 && !pointTest.inRectangle(m_bboxhandle) )
+//        {
+////          ROS_INFO("A point to delete %lf, %lf !", pointTest.get_u(), pointTest.get_v());
+//          m_img_2.bitmap[ v * m_img_.getWidth() + u ] = 0;
+
+//          //        vpPixelMeterConversion::convertPoint(m_cam, v, u, x, y);
+//        }
+//      }
+//    }
+  }
+//  vpDisplay::display(m_img_2);
+//  vpDisplay::displayRectangle(m_img_2, m_bboxhandle, vpColor::yellow);
+//  vpDisplay::displayText(m_img_2, 15, 5, "Left click to quit.", vpColor::red);
+//  vpDisplay::flush(m_img_2);
+  if(vpDisplay::getClick(m_img_2, button, false)) {
+    if(button == vpMouseButton::button3)
       ros::shutdown();
-    else if(button == vpMouseButton::button3)
-      m_bbox_is_fixed = false;
+  }
+
+//  if (!m_bbox_is_fixed && allPointsHandle.size() > 10){
+//    m_bboxhandle = vpImagePoint::getBBox(allPointsHandle);
+//  }
+  vpDisplay::displayRectangle(m_img_, m_bboxdetectionhandle, vpColor::green);
+  vpDisplay::displayRectangle(m_img_, m_bboxhandle, vpColor::yellow);
+  vpDisplay::displayText(m_img_, 15, 5, "Left click to quit.", vpColor::red);
+  vpDisplay::displayFrame(m_img_, m_cMh, m_cam_rgb, 0.1);
+  vpDisplay::flush(m_img_);
+  if(vpDisplay::getClick(m_img_, button, false)) {
+//    if (button == vpMouseButton::button1)
+//      m_bbox_is_fixed = true;
+//    else if(button == vpMouseButton::button2)
+//      m_bbox_is_fixed = false;
+    if(button == vpMouseButton::button3)
+      ros::shutdown();
   }
 
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulPlane(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+{
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_useful(new pcl::PointCloud<pcl::PointXYZ>);
+  cloud_useful->width = 1;
+  cloud_useful->height = 1;
+  cloud_useful->points.resize (cloud_useful->width * cloud_useful->height);
+  static double x_min, x_max, y_min, y_max;
+  double xc,yc,zc;
+
+  vpPixelMeterConversion::convertPoint(m_cam_rgb, 480, 640, x_max, y_max);
+  vpPixelMeterConversion::convertPoint(m_cam_rgb, 0, 0, x_min, y_min);
+
+  size_t width_useful = 0;
+
+  m_X_min = x_min * m_Z_min;
+  m_X_max = x_max * m_Z_max;
+  m_Y_min = y_min * m_Z_min;
+  m_Y_max = y_max * m_Z_max;
+//  m_X_min -= m_extrinsicParam[0];
+//  m_X_max -= m_extrinsicParam[0];
+//  m_Y_min -= m_extrinsicParam[1];
+//  m_Y_max -= m_extrinsicParam[1];
+
+  for(int i = 0; i < cloud->size(); i++)
+  {
+    xc = cloud->points[i].x;
+    yc = cloud->points[i].y;
+    zc = cloud->points[i].z;
+    if (xc > m_X_min && xc < m_X_max && yc > m_Y_min && yc < m_Y_max )
+    {
+      width_useful++;
+      cloud_useful->width = width_useful;
+      cloud_useful->points.resize (cloud_useful->width * cloud_useful->height);
+      cloud_useful->points[width_useful-1].x = xc;
+      cloud_useful->points[width_useful-1].y = yc;
+      cloud_useful->points[width_useful-1].z = zc;
+    }
+  }
+
+  return cloud_useful;
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulHandle(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_useful(new pcl::PointCloud<pcl::PointXYZ>);
   cloud_useful->width = 1;
@@ -752,8 +936,8 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulCloud(
       cloud_useful->points[width_useful-1].z = zc;
     }
   }
-  ROS_INFO("zmin = %lf,    zmax = %lf", m_Z_min, m_Z_max);
-  ROS_INFO("size of cloud useful = %ld", width_useful);
+//  ROS_INFO("zmin = %lf,    zmax = %lf", m_Z_min, m_Z_max);
+//  ROS_INFO("size of cloud useful = %ld", width_useful);
   return cloud_useful;
 }
 
