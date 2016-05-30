@@ -24,6 +24,9 @@
 #include <tf/transform_broadcaster.h>
 #include <visp/vpRobust.h>
 #include <visp3/core/vpImagePoint.h>
+#include <visp3/blob/vpDot2.h>
+#include <visp3/blob/vpDot.h>
+#include <visp3/core/vpPolygon.h>
 
 #if defined(Success)
 #undef Success
@@ -58,6 +61,11 @@
 #include <pcl/console/parse.h>
 #include <pcl/sample_consensus/sac_model_normal_plane.h>
 
+struct inliersAndCoefficients
+{
+  pcl::ModelCoefficients::Ptr coefficients;
+  pcl::PointIndices::Ptr inliers;
+};
 
 class DoorHandleDetectionNode
 {
@@ -66,7 +74,7 @@ public:
   virtual ~DoorHandleDetectionNode();
 
 public:
-  pcl::ModelCoefficients::Ptr getPlaneCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  inliersAndCoefficients getPlaneInliersAndCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   pcl::PointIndices::Ptr getPlaneInliers(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   vpColVector getCoeffLineWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   vpColVector getCoeffPlaneWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud, const double centroidx, const double centroidy, const double centroidz, vpColVector normal);
@@ -74,7 +82,8 @@ public:
   static double computeY(const vpColVector coeffs, const double x, const double z);
   static double computeZ(const vpColVector coeffs, const double x, const double y);
   vpColVector getCenterPCL(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr getOnlyUsefulCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr getOnlyUsefulPlane(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr getOnlyUsefulHandle(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   vpHomogeneousMatrix createTFPlane(const vpColVector coeffs, const double x, const double y, const double z);
   vpHomogeneousMatrix createTFLine(const vpColVector coeffs, vpColVector normal, const double x, const double y, const double z, const vpRotationMatrix cRp, const vpHomogeneousMatrix cMp);
   pcl::PointCloud<pcl::PointXYZ>::Ptr createPlaneFromInliers(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud, const pcl::PointIndices::Ptr inliers, pcl::ModelCoefficients::Ptr coefficients);
@@ -125,22 +134,31 @@ protected:
   double m_Z_max;
   bool m_is_door_handle_present;
   bool m_cam_is_initialized;
+  bool m_tracking_is_initialized;
   bool m_plane_is_initialized;
   bool m_useful_cloud_is_initialized;
   bool m_disp_is_initialized;
   bool m_extrinsic_param_are_initialized;
   bool m_bbox_is_fixed;
+  bool m_tracking_works;
+  bool debug;
   vpImage<unsigned char> m_img_;
+  vpImage<unsigned char> m_img_2;
   vpImage<unsigned char> m_img_mono;
   vpCameraParameters m_cam_rgb;
   vpTranslationVector m_extrinsicParam;
   vpHomogeneousMatrix m_dMh;
   vpHomogeneousMatrix m_cMh;
+  vpRect m_bboxdetectionhandle;
   vpRect m_bboxhandle;
   vpRect m_bboxplane;
   vpDisplay* m_disp;
+  vpDisplay* m_disp2;
   vpDisplay* m_disp_mono;
+  vpImagePoint m_pointPoseHandle;
   bool m_soft;
+  vpDot2 m_blob_2;
+  vpDot m_blob;
 };
 
 #endif
