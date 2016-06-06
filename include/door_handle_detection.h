@@ -52,6 +52,7 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/project_inliers.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/surface/convex_hull.h>
 #include <pcl/features/normal_3d.h>
 #include <pcl/sample_consensus/ransac.h>
@@ -97,15 +98,18 @@ public:
   void displayImage(const sensor_msgs::Image::ConstPtr& image);
 
 protected:
+  //ROS
   ros::NodeHandle n;
   ros::Publisher homogeneous_matrix_pub;
   ros::Publisher pcl_plane_pub;
   ros::Publisher pcl_dh_pub;
   ros::Publisher door_handle_final_pub;
+  ros::Publisher door_handle_status_pub;
   ros::Subscriber pcl_frame_sub;
   ros::Subscriber image_frame_sub;
   ros::Subscriber cam_rgb_info_sub;
   ros::Subscriber cam_depth_info_sub;
+
   std::string m_imageTopicName;
   std::string m_pclTopicName;
   std::string m_cameraRGBTopicName;
@@ -132,7 +136,7 @@ protected:
   double m_Z_min;
   double m_Z_center;
   double m_Z_max;
-  bool m_is_door_handle_present;
+  int m_is_door_handle_present;
   bool m_cam_is_initialized;
   bool m_tracking_is_initialized;
   bool m_plane_is_initialized;
@@ -144,7 +148,7 @@ protected:
   bool debug;
   vpImage<unsigned char> m_img_;
   vpImage<unsigned char> m_img_2;
-  vpImage<unsigned char> m_img_mono;
+  vpImage<vpRGBa> m_img_mono;
   vpCameraParameters m_cam_rgb;
   vpTranslationVector m_extrinsicParam;
   vpHomogeneousMatrix m_dMh;
