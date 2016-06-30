@@ -6,7 +6,7 @@ The arguments given are the device indices of the cameras determined by the Dept
 <launch>
 <!--  <param name="m_parent_frame" type="string" value="/camera_link"/> -->
 
-  <node pkg="door_handle_detection" type="door_handle_detection_node" name="door_handle_detection" output="screen">
+  <node pkg="door_handle_detection" type="door_handle_detection_node" name="door_handle_detection" output="screen" launch-prefix="gdb -ex run --args" >
     <param name="dh_right" type="bool" value="true"/>
     <param name="parent_tf" type="string" value="SR300_depth_optical_frame"/>
     <param name="pclTopicName" type="string" value="/SR300/depth/points"/>

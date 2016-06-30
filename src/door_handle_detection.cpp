@@ -1,6 +1,197 @@
 #include "door_handle_detection.h"
+#include <visp3/io/vpImageIo.h>
 
 #include <std_msgs/Int8.h>
+
+void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int nInputs, double dt)
+{
+  KF.init(nStates, nMeasurements, nInputs, CV_64F);                 // init Kalman Filter
+  cv::setIdentity(KF.processNoiseCov, cv::Scalar::all(8e-6));       // set process noise
+  cv::setIdentity(KF.measurementNoiseCov, cv::Scalar::all(4e-5));   // set measurement noise
+  cv::setIdentity(KF.errorCovPost, cv::Scalar::all(1));             // error covariance
+                 /* DYNAMIC MODEL */
+  //  [1 0 0 dt  0  0 dt2   0   0 0 0 0  0  0  0   0   0   0]
+  //  [0 1 0  0 dt  0   0 dt2   0 0 0 0  0  0  0   0   0   0]
+  //  [0 0 1  0  0 dt   0   0 dt2 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  1  0  0  dt   0   0 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  0  1  0   0  dt   0 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  0  0  1   0   0  dt 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  0  0  0   1   0   0 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  0  0  0   0   1   0 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  0  0  0   0   0   1 0 0 0  0  0  0   0   0   0]
+  //  [0 0 0  0  0  0   0   0   0 1 0 0 dt  0  0 dt2   0   0]
+  //  [0 0 0  0  0  0   0   0   0 0 1 0  0 dt  0   0 dt2   0]
+  //  [0 0 0  0  0  0   0   0   0 0 0 1  0  0 dt   0   0 dt2]
+  //  [0 0 0  0  0  0   0   0   0 0 0 0  1  0  0  dt   0   0]
+  //  [0 0 0  0  0  0   0   0   0 0 0 0  0  1  0   0  dt   0]
+  //  [0 0 0  0  0  0   0   0   0 0 0 0  0  0  1   0   0  dt]
+  //  [0 0 0  0  0  0   0   0   0 0 0 0  0  0  0   1   0   0]
+  //  [0 0 0  0  0  0   0   0   0 0 0 0  0  0  0   0   1   0]
+  //  [0 0 0  0  0  0   0   0   0 0 0 0  0  0  0   0   0   1]
+  // position
+  KF.transitionMatrix.at<double>(0,3) = dt;
+  KF.transitionMatrix.at<double>(1,4) = dt;
+  KF.transitionMatrix.at<double>(2,5) = dt;
+  KF.transitionMatrix.at<double>(3,6) = dt;
+  KF.transitionMatrix.at<double>(4,7) = dt;
+  KF.transitionMatrix.at<double>(5,8) = dt;
+  KF.transitionMatrix.at<double>(0,6) = 0.5*pow(dt,2);
+  KF.transitionMatrix.at<double>(1,7) = 0.5*pow(dt,2);
+  KF.transitionMatrix.at<double>(2,8) = 0.5*pow(dt,2);
+  // orientation
+  KF.transitionMatrix.at<double>(9,12) = dt;
+  KF.transitionMatrix.at<double>(10,13) = dt;
+  KF.transitionMatrix.at<double>(11,14) = dt;
+  KF.transitionMatrix.at<double>(12,15) = dt;
+  KF.transitionMatrix.at<double>(13,16) = dt;
+  KF.transitionMatrix.at<double>(14,17) = dt;
+  KF.transitionMatrix.at<double>(9,15) = 0.5*pow(dt,2);
+  KF.transitionMatrix.at<double>(10,16) = 0.5*pow(dt,2);
+  KF.transitionMatrix.at<double>(11,17) = 0.5*pow(dt,2);
+       /* MEASUREMENT MODEL */
+  //  [1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+  //  [0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+  //  [0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+  //  [0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0]
+  //  [0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]
+  //  [0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0]
+  KF.measurementMatrix.at<double>(0,0) = 1;  // x
+  KF.measurementMatrix.at<double>(1,1) = 1;  // y
+  KF.measurementMatrix.at<double>(2,2) = 1;  // z
+  KF.measurementMatrix.at<double>(3,9) = 1;  // roll
+  KF.measurementMatrix.at<double>(4,10) = 1; // pitch
+  KF.measurementMatrix.at<double>(5,11) = 1; // yaw
+}
+
+// Converts a given Rotation Matrix to Euler angles
+cv::Mat rot2euler(const cv::Mat & rotationMatrix)
+{
+  cv::Mat euler(3,1,CV_64F);
+
+  double m00 = rotationMatrix.at<double>(0,0);
+  double m02 = rotationMatrix.at<double>(0,2);
+  double m10 = rotationMatrix.at<double>(1,0);
+  double m11 = rotationMatrix.at<double>(1,1);
+  double m12 = rotationMatrix.at<double>(1,2);
+  double m20 = rotationMatrix.at<double>(2,0);
+  double m22 = rotationMatrix.at<double>(2,2);
+
+  double x, y, z;
+
+  // Assuming the angles are in radians.
+  if (m10 > 0.998) { // singularity at north pole
+    x = 0;
+    y = CV_PI/2;
+    z = atan2(m02,m22);
+  }
+  else if (m10 < -0.998) { // singularity at south pole
+    x = 0;
+    y = -CV_PI/2;
+    z = atan2(m02,m22);
+  }
+  else
+  {
+    x = atan2(-m12,m11);
+    y = asin(m10);
+    z = atan2(-m20,m00);
+  }
+
+  euler.at<double>(0) = x;
+  euler.at<double>(1) = y;
+  euler.at<double>(2) = z;
+
+  return euler;
+}
+
+// Converts a given Euler angles to Rotation Matrix
+cv::Mat euler2rot(const cv::Mat & euler)
+{
+  cv::Mat rotationMatrix(3,3,CV_64F);
+
+  double x = euler.at<double>(0);
+  double y = euler.at<double>(1);
+  double z = euler.at<double>(2);
+
+  // Assuming the angles are in radians.
+  double ch = cos(z);
+  double sh = sin(z);
+  double ca = cos(y);
+  double sa = sin(y);
+  double cb = cos(x);
+  double sb = sin(x);
+
+  double m00, m01, m02, m10, m11, m12, m20, m21, m22;
+
+  m00 = ch * ca;
+  m01 = sh*sb - ch*sa*cb;
+  m02 = ch*sa*sb + sh*cb;
+  m10 = sa;
+  m11 = ca*cb;
+  m12 = -ca*sb;
+  m20 = -sh*ca;
+  m21 = sh*sa*cb + ch*sb;
+  m22 = -sh*sa*sb + ch*cb;
+
+  rotationMatrix.at<double>(0,0) = m00;
+  rotationMatrix.at<double>(0,1) = m01;
+  rotationMatrix.at<double>(0,2) = m02;
+  rotationMatrix.at<double>(1,0) = m10;
+  rotationMatrix.at<double>(1,1) = m11;
+  rotationMatrix.at<double>(1,2) = m12;
+  rotationMatrix.at<double>(2,0) = m20;
+  rotationMatrix.at<double>(2,1) = m21;
+  rotationMatrix.at<double>(2,2) = m22;
+
+  return rotationMatrix;
+}
+
+void fillMeasurements( cv::Mat &measurements, const cv::Mat &translation_measured, const cv::Mat &rotation_measured)
+{
+    // Convert rotation matrix to euler angles
+    cv::Mat measured_eulers(3, 1, CV_64F);
+    measured_eulers = rot2euler(rotation_measured);
+    // Set measurement to predict
+    measurements.at<double>(0) = translation_measured.at<double>(0); // x
+    measurements.at<double>(1) = translation_measured.at<double>(1); // y
+    measurements.at<double>(2) = translation_measured.at<double>(2); // z
+    measurements.at<double>(3) = measured_eulers.at<double>(0);      // roll
+    measurements.at<double>(4) = measured_eulers.at<double>(1);      // pitch
+    measurements.at<double>(5) = measured_eulers.at<double>(2);      // yaw
+}
+
+void updateKalmanFilter( cv::KalmanFilter &KF, cv::Mat &measurement, cv::Mat &translation_estimated, cv::Mat &rotation_estimated )
+{
+    // First predict, to update the internal statePre variable
+    cv::Mat prediction = KF.predict();
+    // The "correct" phase that is going to use the predicted value and our measurement
+    cv::Mat estimated = KF.correct(measurement);
+#if 1
+    // Estimated translation
+    translation_estimated.at<double>(0) = estimated.at<double>(0);
+    translation_estimated.at<double>(1) = estimated.at<double>(1);
+    translation_estimated.at<double>(2) = estimated.at<double>(2);
+    // Estimated euler angles
+    cv::Mat eulers_estimated(3, 1, CV_64F);
+    eulers_estimated.at<double>(0) = estimated.at<double>(9);
+    eulers_estimated.at<double>(1) = estimated.at<double>(10);
+    eulers_estimated.at<double>(2) = estimated.at<double>(11);
+    // Convert estimated quaternion to rotation matrix
+    rotation_estimated = euler2rot(eulers_estimated);
+#else
+    // Estimated translation
+    translation_estimated.at<double>(0) = estimated.at<double>(0);
+    translation_estimated.at<double>(1) = estimated.at<double>(1);
+    translation_estimated.at<double>(2) = estimated.at<double>(2);
+
+    // Estimated euler angles
+    cv::Mat eulers_estimated(3, 1, CV_64F);
+    eulers_estimated.at<double>(0) = prediction.at<double>(9);
+    eulers_estimated.at<double>(1) = prediction.at<double>(10);
+    eulers_estimated.at<double>(2) = prediction.at<double>(11);
+    // Convert estimated quaternion to rotation matrix
+    rotation_estimated = euler2rot(eulers_estimated);
+#endif
+}
 
 DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
 {
@@ -53,6 +244,19 @@ DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
     image_frame_sub = n.subscribe( m_imageTopicName, 1, (boost::function < void(const sensor_msgs::Image::ConstPtr&)>) boost::bind( &DoorHandleDetectionNode::displayImage, this, _1 ));
 
     debug_pcl_pub = n.advertise< pcl::PointCloud<pcl::PointXYZ> >("pcl_debug", 1);
+
+    m_blob.setGraphics(true);
+    m_blob.setGraphicsThickness(1);
+//    m_blob.setEllipsoidShapePrecision(0.);
+    m_blob.setGrayLevelMin(170);
+    m_blob.setGrayLevelMax(255);
+
+    //Kalman Filter
+    int nStates = 18;            // the number of states
+    int nMeasurements = 6;       // the number of measured states
+    int nInputs = 0;             // the number of action control
+    double dt = 1/15;           // time between measurements (1/FPS)
+    initKalmanFilter(m_KF, nStates, nMeasurements, nInputs, dt);    // init function
 }
 
 DoorHandleDetectionNode::~DoorHandleDetectionNode()
@@ -147,7 +351,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 
             m_Z = -coeffs[3]/(coeffs[0]*m_x_min + coeffs[1]*m_y_min + coeffs[2]) - m_height_dh;
             m_Z -= m_extrinsicParam[2];
-            ROS_INFO("z = %lf", m_Z);
+//            ROS_INFO("z = %lf", m_Z);
 
 //            time_init = ros::Time::now();
             cloud_bbox = DoorHandleDetectionNode::getOnlyUsefulHandle(cloud);
@@ -244,12 +448,49 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 //                ROS_INFO("DEBUG 3");
 
 //                time_init = ros::Time::now();
-                DoorHandleDetectionNode::getImageVisp(cloud_handle);
+                DoorHandleDetectionNode::getImageVisp(cloud_handle );
 //                ROS_INFO_STREAM("Time taken for the display and morphomat :" << ros::Time::now() - time_init << " Time taken until now :" << ros::Time::now() - begin);
 //                ROS_INFO("DEBUG 4");
 
                 vpColVector centroidDH = DoorHandleDetectionNode::getCenterPCL(cloud_handle);
 
+                //Create the door handle tf
+                m_dMh = DoorHandleDetectionNode::createTFLine(direction_line, normal, centroidDH[0], centroidDH[1], centroidDH[2], cRp, cMp);
+                m_cMh = m_dMh;
+                m_cMh[0][3] += m_extrinsicParam[0];
+                m_cMh[1][3] += m_extrinsicParam[1];
+                m_cMh[2][3] += m_extrinsicParam[2];
+                std::cout << "Pose :" << m_cMh << std::endl;
+
+                //Kalman Filter
+                vpTranslationVector T_cMh = m_cMh.getTranslationVector();
+                vpRotationMatrix R_cMh = m_cMh.getRotationMatrix();
+                cv::Mat translation_measured(3, 1, CV_64F);
+                cv::Mat rotation_measured(3, 3, CV_64F);
+                for(int i = 0; i < 3; i++){
+                  for(int j = 0; j < 3; j++){
+                    rotation_measured.at<double>(i,j) = R_cMh[i][j];
+                  }
+                  translation_measured.at<double>(i) = T_cMh[i];
+                }
+                cv::Mat measurements(6, 1, CV_64F);
+                // fill the measurements vector
+                fillMeasurements(measurements, translation_measured, rotation_measured);
+
+                // Instantiate estimated translation and rotation
+                cv::Mat translation_estimated(3, 1, CV_64F);
+                cv::Mat rotation_estimated(3, 3, CV_64F);
+                // update the Kalman filter with good measurements
+                updateKalmanFilter( m_KF, measurements, translation_estimated, rotation_estimated);
+                for(int i = 0; i < 3; i++){
+                  for(int j = 0; j < 3; j++){
+                    m_cMh_filtered_kalman[i][j] = rotation_estimated.at<double>(i,j) ;
+                  }
+                  m_cMh_filtered_kalman[i][3] = translation_estimated.at<double>(i);
+                }
+                std::cout << "Pose Filtered :" << m_cMh_filtered_kalman << std::endl;
+
+                //Mean Filtering with the t-1 and t-2
                 if (!m_is_previous_initialized)
                 {
                     m_direction_line_previous = direction_line;
@@ -262,7 +503,7 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                 {
                     if (m_direction_line_previous[0] != direction_line[0])
                     {
-                        direction_line = (/*m_direction_line_pre_previous +*/ m_direction_line_previous + direction_line) / 2;
+                        direction_line = (m_direction_line_pre_previous + m_direction_line_previous + direction_line) / 3;
                         //          ROS_INFO("vec[t-2]: %lf %lf %lf", m_direction_line_pre_previous[0], m_direction_line_pre_previous[1], m_direction_line_pre_previous[2]);
                         //          ROS_INFO("vec[t-1]: %lf %lf %lf", m_direction_line_previous[0], m_direction_line_previous[1], m_direction_line_previous[2]);
                         //          ROS_INFO("vec[t]  : %lf %lf %lf", direction_line[0], direction_line[1], direction_line[2]);
@@ -271,22 +512,22 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                     }
                     if (m_centroidDH_previous[0] != centroidDH[0])
                     {
-                        centroidDH = (/*m_centroidDH_pre_previous +*/ m_centroidDH_previous + centroidDH) / 2;
+                        centroidDH = (m_centroidDH_pre_previous + m_centroidDH_previous + centroidDH) / 3;
                         m_centroidDH_pre_previous = m_centroidDH_previous;
                         m_centroidDH_previous = centroidDH;
                     }
                 }
+                m_cMh_filtered_mean = DoorHandleDetectionNode::createTFLine(direction_line, normal, centroidDH[0], centroidDH[1], centroidDH[2], cRp, cMp);
+                m_cMh_filtered_mean[0][3] += m_extrinsicParam[0];
+                m_cMh_filtered_mean[1][3] += m_extrinsicParam[1];
+                m_cMh_filtered_mean[2][3] += m_extrinsicParam[2];
 
-                //Create the door handle tf
-                m_dMh = DoorHandleDetectionNode::createTFLine(direction_line, normal, centroidDH[0], centroidDH[1], centroidDH[2], cRp, cMp);
-                m_cMh = m_dMh;
-                m_cMh[0][3] += m_extrinsicParam[0];
-                m_cMh[1][3] += m_extrinsicParam[1];
-                m_cMh[2][3] += m_extrinsicParam[2];
                 cMdh_msg.header.stamp = ros::Time::now();
                 cMdh_msg.pose = visp_bridge::toGeometryMsgsPose(m_cMh);
                 pose_handle_pub.publish(cMdh_msg);
+
             }
+
 
         }
 
@@ -673,14 +914,14 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
     vpImagePoint bottomRightBBoxHandle;
     vpImagePoint topLeftBBoxHandle;
     geometry_msgs::PointStamped point_handle;
-    double x_center, y_center, X_center, Y_center, Z_center, X, Y, Z, x, y, u, v;
+    double X, Y, Z, x, y, u, v;
 
     m_img_mono = visp_bridge::toVispImageRGBa(*image);
 
     vpDisplay::display(m_img_mono);
-    vpDisplay::displayText(m_img_mono, 15, 5, "Right click to select a region for the detection of the door handle,", vpColor::red);
-    vpDisplay::displayText(m_img_mono, 30, 5, "Middle click to delete the bounding box,", vpColor::red);
-    vpDisplay::displayText(m_img_mono, 45, 5, "Left click to quit.", vpColor::red);
+    //vpDisplay::displayText(m_img_mono, 15, 5, "Right click to select a region for the detection of the door handle,", vpColor::red);
+    //vpDisplay::displayText(m_img_mono, 30, 5, "Middle click to delete the bounding box,", vpColor::red);
+    //vpDisplay::displayText(m_img_mono, 45, 5, "Left click to quit.", vpColor::red);
     //  vpDisplay::flush(m_img_mono);
     if ( vpDisplay::getClick( m_img_mono, pointClicked, button, false) )
     {
@@ -728,12 +969,14 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
     }
     if ( m_is_door_handle_present )
     {
-        X_center = m_cMh[0][3];
-        Y_center = m_cMh[1][3];
-        Z_center = m_cMh[2][3];
-        x_center = X_center / Z_center;
-        y_center = Y_center / Z_center;
-        vpMeterPixelConversion::convertPoint(m_cam_rgb, x_center, y_center, m_pointPoseHandle);
+        //cMh is on the handle rotation axis, we put it on the cog
+        vpHomogeneousMatrix hMhcog(m_lenght_dh / 2,0,0,0,0,0);
+        vpHomogeneousMatrix cMhcog = m_cMh* hMhcog;
+        vpTranslationVector c_t_hcog = cMhcog.getTranslationVector();
+        double x_hcog = c_t_hcog[0]/c_t_hcog[2];
+        double y_hcog = c_t_hcog[1]/c_t_hcog[2];
+
+        vpMeterPixelConversion::convertPoint(m_cam_rgb, x_hcog, y_hcog, m_pointPoseHandle);
         if (m_dh_right)
         {
             bottomRightBBoxHandle.set_uv( m_pointPoseHandle.get_u() + 150, m_pointPoseHandle.get_v() + 80 );
@@ -765,7 +1008,9 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
         point_handle.point.y = v;
         point_handle.point.z = 0.0;
         point_handle_pub.publish(point_handle);
-        vpDisplay::displayFrame(m_img_mono, m_cMh, m_cam_rgb, 0.1, vpColor::none, 3);
+//        vpDisplay::displayFrame(m_img_mono, m_cMh, m_cam_rgb, 0.1, vpColor::red, 1);
+        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_kalman, m_cam_rgb, 0.1, vpColor::green, 1);
+//        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_mean, m_cam_rgb, 0.1, vpColor::yellow, 1);
     }
     vpDisplay::flush(m_img_mono);
 
@@ -779,11 +1024,7 @@ void DoorHandleDetectionNode::getImageVisp(const pcl::PointCloud<pcl::PointXYZ>:
     vpImagePoint topLeftBBoxHandle;
     vpMouseButton::vpMouseButtonType button;
     vpRect searchingField;
-    m_blob.setGraphics(true);
-    m_blob.setGraphicsThickness(1);
-    m_blob.setEllipsoidShapePrecision(0.);
-    m_blob.setGrayLevelMin(170);
-    m_blob.setGrayLevelMax(255);
+
 
     for(int i = 0; i < cloud->size(); i++ ){
         X = cloud->points[i].x + m_extrinsicParam[0] ;
@@ -794,7 +1035,7 @@ void DoorHandleDetectionNode::getImageVisp(const pcl::PointCloud<pcl::PointXYZ>:
 
         vpMeterPixelConversion::convertPoint(m_cam_rgb, x, y, u, v);
 
-        if(u < m_img_.getWidth() && v < m_img_.getHeight() && u > 0 && v > 0 )
+        if(u < m_img_.getWidth()-1 && v < m_img_.getHeight()-1 && u > 0 && v > 0 )
         {
 //            ROS_INFO("DEBUG la : u: %lf et v: %lf", u, v );
             m_img_.bitmap[ (int)v * m_img_.getWidth() + (int)u ] = 250;
@@ -810,6 +1051,13 @@ void DoorHandleDetectionNode::getImageVisp(const pcl::PointCloud<pcl::PointXYZ>:
     vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
     //  vpImageMorphology::dilatation(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
 
+
+    if (0){
+      static int iter = 0;
+      char filename[255];
+      sprintf(filename, "/tmp/bheintz/I%04d.png", iter ++);
+      vpImageIo::write(m_img_, filename);
+    }
     vpDisplay::display(m_img_);
     if ( !m_stop_detection )
     {
@@ -818,7 +1066,7 @@ void DoorHandleDetectionNode::getImageVisp(const pcl::PointCloud<pcl::PointXYZ>:
             {
                 if ( !m_tracking_is_initialized )
                 {
-                    if ( m_pointPoseHandle.get_u() > 0 && m_pointPoseHandle.get_v() > 0 && m_pointPoseHandle.get_u() < m_img_.getWidth() && m_pointPoseHandle.get_v() < m_img_.getHeight() )
+                    if ( m_pointPoseHandle.get_u() > 0 && m_pointPoseHandle.get_v() > 0 && m_pointPoseHandle.get_u() < m_img_.getWidth()-1 && m_pointPoseHandle.get_v() < m_img_.getHeight()-1 )
                     {
                         m_blob.initTracking(m_img_, m_pointPoseHandle);
                     //        ROS_INFO_STREAM( "Blob from init :" << m_blob.getCog() << " Gray min : " << m_blob.getGrayLevelMin() << " Gray max : " << m_blob.getGrayLevelMax() << " Precision : " << m_blob.getGrayLevelPrecision());
@@ -839,6 +1087,7 @@ void DoorHandleDetectionNode::getImageVisp(const pcl::PointCloud<pcl::PointXYZ>:
         catch(...) {
             m_tracking_is_initialized = false;
             m_tracking_works = false;
+            ROS_INFO_STREAM("Tracking failed");
 
         }
     }
@@ -897,7 +1146,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulHandle
     m_X_max = m_x_max * m_Z;
     m_Y_min = m_y_min * m_Z;
     m_Y_max = m_y_max * m_Z;
-    ROS_INFO("XMIN = %lf, XMAX = %lf,    YMIN = %lf, YMAX = %lf,    Z = %lf",m_X_min, m_X_max, m_Y_min, m_Y_max, m_Z);
+//    ROS_INFO("XMIN = %lf, XMAX = %lf,    YMIN = %lf, YMAX = %lf,    Z = %lf",m_X_min, m_X_max, m_Y_min, m_Y_max, m_Z);
     m_X_min -= m_extrinsicParam[0];
     m_X_max -= m_extrinsicParam[0];
     m_Y_min -= m_extrinsicParam[1];

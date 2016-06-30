@@ -64,6 +64,9 @@
 #include <pcl/console/parse.h>
 #include <pcl/sample_consensus/sac_model_normal_plane.h>
 
+//Kalman Filter
+#include <opencv2/video/tracking.hpp>
+
 struct inliersAndCoefficients
 {
   pcl::ModelCoefficients::Ptr coefficients;
@@ -147,6 +150,8 @@ protected:
   vpTranslationVector m_extrinsicParam;
   vpHomogeneousMatrix m_dMh;
   vpHomogeneousMatrix m_cMh;
+  vpHomogeneousMatrix m_cMh_filtered_kalman;
+  vpHomogeneousMatrix m_cMh_filtered_mean;
   vpRect m_bboxdetectionhandle;
   vpRect m_bboxhandle;
   vpRect m_bboxplane;
@@ -154,7 +159,7 @@ protected:
   vpDisplay* m_disp2;
   vpDisplay* m_disp_mono;
   vpImagePoint m_pointPoseHandle;
-  vpDot2 m_blob;
+  vpDot m_blob;
   double m_lenght_dh;
   double m_height_dh;
   double m_x_min;
@@ -166,6 +171,9 @@ protected:
   double m_Y_min;
   double m_Y_max;
   double m_Z;
+
+  //Kalman Filter
+  cv::KalmanFilter m_KF;
 
 };
 
