@@ -92,7 +92,7 @@ public:
   vpColVector getCoeffLineWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   vpColVector getCoeffPlaneWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud, const double centroidx, const double centroidy, const double centroidz, vpColVector normal);
   void getExtrinsicParameters(const sensor_msgs::CameraInfoConstPtr &cam_depth);
-  void getImageVisp(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+  void morphoSandwich(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   pcl::PointCloud<pcl::PointXYZ>::Ptr getOnlyUsefulHandle(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   inliersAndCoefficients getPlaneInliersAndCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   void initDisplayVisp();
@@ -150,6 +150,7 @@ protected:
   vpTranslationVector m_extrinsicParam;
   vpHomogeneousMatrix m_dMh;
   vpHomogeneousMatrix m_cMh;
+  vpHomogeneousMatrix m_cMh_test;
   vpHomogeneousMatrix m_cMh_filtered_kalman;
   vpHomogeneousMatrix m_cMh_filtered_mean;
   vpRect m_bboxdetectionhandle;
@@ -159,7 +160,7 @@ protected:
   vpDisplay* m_disp2;
   vpDisplay* m_disp_mono;
   vpImagePoint m_pointPoseHandle;
-  vpDot m_blob;
+  vpDot2 m_blob;
   double m_lenght_dh;
   double m_height_dh;
   double m_x_min;
