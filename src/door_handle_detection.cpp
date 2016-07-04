@@ -220,7 +220,7 @@ DoorHandleDetectionNode::DoorHandleDetectionNode(ros::NodeHandle nh)
     n.param<std::string>("pclTopicName", m_pclTopicName, "/softkinetic_camera/depth/points");
     n.param<std::string>("cameraRGBTopicName", m_cameraRGBTopicName, "/softkinetic_camera/rgb/camera_info");
     n.param<std::string>("cameraDepthTopicName", m_cameraDepthTopicName, "/softkinetic_camera/depth/camera_info");
-    n.param<std::string>("parent_tf", m_parent_tf, "softkinetic_camera_link");
+//    n.param<std::string>("parent_tf", m_parent_tf, "softkinetic_camera_link");
     n.param("dh_right", m_dh_right, true);
     n.param("debug", debug, false);
     n.param("lenght_dh",m_lenght_dh, 0.1);
@@ -927,6 +927,8 @@ void DoorHandleDetectionNode::getExtrinsicParameters(const sensor_msgs::CameraIn
         m_extrinsicParam[1] = cam_depth->P[7];
         m_extrinsicParam[2] = cam_depth->P[11];
         ROS_INFO_STREAM("Extrinsic param  = \n" << m_extrinsicParam);
+
+        m_parent_tf = cam_depth->header.frame_id;
 
         cam_depth_info_sub.shutdown();
         m_extrinsic_param_are_initialized = true;

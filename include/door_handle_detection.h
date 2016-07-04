@@ -172,6 +172,7 @@ protected:
   double m_Y_min;
   double m_Y_max;
   double m_Z;
+  double m_Z_bottomright;
 
   //Kalman Filter
   cv::KalmanFilter m_KF;
