@@ -349,8 +349,9 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                 cMp = DoorHandleDetectionNode::createTFPlane(coeffs, centroidPlane[0], centroidPlane[1], centroidPlane[2]);
             }
 
-            m_Z = -coeffs[3]/(coeffs[0]*m_x_min + coeffs[1]*m_y_min + coeffs[2]) - m_height_dh;
-            m_Z -= m_extrinsicParam[2];
+            m_Z = -coeffs[3]/(coeffs[0]*m_x_min + coeffs[1]*m_y_min + coeffs[2]) ;
+            m_Z_bottomright = -coeffs[3]/(coeffs[0]*m_x_max + coeffs[1]*m_y_max + coeffs[2]) ;
+//            m_Z -= m_extrinsicParam[2];
 //            ROS_INFO("z = %lf", m_Z);
 
 //            time_init = ros::Time::now();
@@ -358,17 +359,22 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 //            ROS_INFO_STREAM("Time taken for the cloud useful :" << ros::Time::now() - time_init<< " Time taken until now :" << ros::Time::now() - begin);
             if (debug)
             {
-                cloud_debug->width = 2;
-                cloud_debug->height = 1;
-                cloud_debug->points.resize (cloud_debug->width * cloud_debug->height);
-                cloud_debug->points[0].x = m_X_min;
-                cloud_debug->points[0].y = m_Y_min;
-                cloud_debug->points[0].z = m_Z;
-                cloud_debug->points[1].x = m_X_max;
-                cloud_debug->points[1].y = m_Y_max;
-                cloud_debug->points[1].z = m_Z;
-                cloud_debug->header.frame_id = m_parent_tf;
-                debug_pcl_pub.publish(cloud_debug);
+              m_X_min = m_x_min * m_Z;
+              m_X_max = m_x_max * m_Z_bottomright;
+              m_Y_min = m_y_min * m_Z;
+              m_Y_max = m_y_max * m_Z_bottomright;
+
+              cloud_debug->width = 2;
+              cloud_debug->height = 1;
+              cloud_debug->points.resize (cloud_debug->width * cloud_debug->height);
+              cloud_debug->points[0].x = m_X_min;
+              cloud_debug->points[0].y = m_Y_min;
+              cloud_debug->points[0].z = m_Z;
+              cloud_debug->points[1].x = m_X_max;
+              cloud_debug->points[1].y = m_Y_max;
+              cloud_debug->points[1].z = m_Z_bottomright;
+              cloud_debug->header.frame_id = m_parent_tf;
+              debug_pcl_pub.publish(cloud_debug);
             }
             //Creating a cloud with all the points of the door handle
 //            time_init = ros::Time::now();
@@ -388,11 +394,11 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                 vpDisplay::flush(m_img_mono);
                 ROS_INFO("No door handle detected : %d", m_is_door_handle_present);
                 vpPixelMeterConversion::convertPoint(m_cam_rgb, 0, 0, m_x_min, m_y_min);
-                vpPixelMeterConversion::convertPoint(m_cam_rgb, 640, 480, m_x_max, m_y_max);
-                m_x_min -= (m_extrinsicParam[0] );
-                m_x_max -= (m_extrinsicParam[0] );
-                m_y_min -= (m_extrinsicParam[1] );
-                m_y_max -= (m_extrinsicParam[1] );
+                vpPixelMeterConversion::convertPoint(m_cam_rgb, m_img_.getWidth() - 1, m_img_.getHeight() - 1, m_x_max, m_y_max);
+//                m_x_min -= (m_extrinsicParam[0] );
+//                m_x_max -= (m_extrinsicParam[0] );
+//                m_y_min -= (m_extrinsicParam[1] );
+//                m_y_max -= (m_extrinsicParam[1] );
             }
             else
             {
@@ -402,20 +408,23 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 
 //                time_init = ros::Time::now();
 
-//                pcl::applyMorphologicalOperator(cloud_sandwich, 0.01, 3, cloud_handle );
-
+                //Morpho of the cloud
+//                ROS_INFO_STREAM("Width of the cloud sandwich : " << cloud_sandwich->size() );
+//                pcl::applyMorphologicalOperator(cloud_sandwich, 5.0f, pcl::MORPH_ERODE, *cloud_handle );
+//                ROS_INFO_STREAM("Width of the cloud handle : " << cloud_handle->size() );
 
                 //Create a RandomSampleConsensus object and compute the model of a line
-                pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_sandwich));
-                pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (model_l);
-                ransac.setDistanceThreshold (.026);
-                ransac.computeModel();
-                ransac.getInliers(inliers2);
-                ransac.getModelCoefficients(Coeff_line);
-                // copies all inliers of the model computed to another PointCloud
-                pcl::copyPointCloud<pcl::PointXYZ>(*cloud_sandwich, inliers2, *cloud_handle);
+//                pcl::SampleConsensusModelLine<pcl::PointXYZ>::Ptr  model_l (new pcl::SampleConsensusModelLine<pcl::PointXYZ> (cloud_sandwich));
+//                pcl::RandomSampleConsensus<pcl::PointXYZ> ransac (model_l);
+//                ransac.setDistanceThreshold (.026);
+//                ransac.computeModel();
+//                ransac.getInliers(inliers2);
+//                ransac.getModelCoefficients(Coeff_line);
+//                // copies all inliers of the model computed to another PointCloud
+//                pcl::copyPointCloud<pcl::PointXYZ>(*cloud_sandwich, inliers2, *cloud_handle);
 //                ROS_INFO_STREAM("Time taken for the line :" << ros::Time::now() - time_init << " Time taken until now :" << ros::Time::now() - begin);
 
+                cloud_handle = cloud_sandwich;
                 //Get the direction line from the cloud sandwich with the odr method
                 direction_line = getCoeffLineWithODR(cloud_handle);
 //                if (m_dh_right)
@@ -907,11 +916,7 @@ void DoorHandleDetectionNode::setupCameraParameters(const sensor_msgs::CameraInf
         //init m_camera parameters
         m_cam_rgb = visp_bridge::toVispCameraParameters(*cam_rgb);
         vpPixelMeterConversion::convertPoint(m_cam_rgb, 0, 0, m_x_min, m_y_min);
-        vpPixelMeterConversion::convertPoint(m_cam_rgb, 640, 480, m_x_max, m_y_max);
-        m_x_min -= (m_extrinsicParam[0] );
-        m_x_max -= (m_extrinsicParam[0] );
-        m_y_min -= (m_extrinsicParam[1] );
-        m_y_max -= (m_extrinsicParam[1] );
+        vpPixelMeterConversion::convertPoint(m_cam_rgb, m_img_.getWidth() - 1, m_img_.getHeight() - 1, m_x_max, m_y_max);
         ROS_INFO_STREAM("Camera param  = \n" << m_cam_rgb);
 
         m_cam_is_initialized = true;
@@ -1012,6 +1017,8 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
             m_tracking_is_initialized = false;
             m_tracking_works = false;
             m_stop_detection = true;
+            vpPixelMeterConversion::convertPoint(m_cam_rgb, 0, 0, m_x_min, m_y_min);
+            vpPixelMeterConversion::convertPoint(m_cam_rgb, m_img_.getWidth() - 1, m_img_.getHeight() - 1, m_x_max, m_y_max);
         }
         else if(button == vpMouseButton::button3)
             ros::shutdown();
@@ -1075,14 +1082,20 @@ void DoorHandleDetectionNode::morphoSandwich(const pcl::PointCloud<pcl::PointXYZ
     vpImagePoint topLeftBBoxHandle;
     vpMouseButton::vpMouseButtonType button;
     vpRect searchingField;
+    vpHomogeneousMatrix dMpoint;
+    vpHomogeneousMatrix cMd;
+    vpHomogeneousMatrix cMpoint;
+    for(unsigned int i=0; i<3; i++)
+      cMd[i][3] = m_extrinsicParam[i];
 
 
     for(int i = 0; i < cloud->size(); i++ ){
-        X = cloud->points[i].x + m_extrinsicParam[0] ;
-        Y = cloud->points[i].y + m_extrinsicParam[1] ;
-        Z = cloud->points[i].z + m_extrinsicParam[2] ;
-        x = X/Z;
-        y = Y/Z;
+        dMpoint[0][3] = cloud->points[i].x + m_extrinsicParam[0];
+        dMpoint[1][3] = cloud->points[i].y + m_extrinsicParam[1];
+        dMpoint[2][3] = cloud->points[i].z + m_extrinsicParam[2];
+//        cMpoint = cMd * dMpoint;
+        x = dMpoint[0][3]/dMpoint[2][3];
+        y = dMpoint[1][3]/dMpoint[2][3];
 
         vpMeterPixelConversion::convertPoint(m_cam_rgb, x, y, u, v);
 
@@ -1146,17 +1159,17 @@ void DoorHandleDetectionNode::morphoSandwich(const pcl::PointCloud<pcl::PointXYZ
 
     if ( m_tracking_works )
     {
-        if (m_bboxhandle.getSize() < 2000)
-        {
-            topLeftBBoxHandle.set_uv( m_bboxdetectionhandle.getLeft(), m_bboxdetectionhandle.getTop() );
-            bottomRightBBoxHandle.set_uv( m_bboxdetectionhandle.getRight(), m_bboxdetectionhandle.getBottom() );
+//        if (m_bboxhandle.getSize() < 2000)
+//        {
+//            topLeftBBoxHandle.set_uv( m_bboxdetectionhandle.getLeft(), m_bboxdetectionhandle.getTop() );
+//            bottomRightBBoxHandle.set_uv( m_bboxdetectionhandle.getRight(), m_bboxdetectionhandle.getBottom() );
 
-        }
-        else
-        {
+//        }
+//        else
+//        {
             topLeftBBoxHandle.set_uv( m_bboxhandle.getLeft() - m_bboxhandle.getWidth()/4, m_bboxhandle.getTop() - m_bboxhandle.getHeight()/4);
-            bottomRightBBoxHandle.set_uv( m_bboxhandle.getRight() + m_bboxhandle.getWidth()/4, m_bboxhandle.getBottom() + m_bboxhandle.getHeight()/4 );
-        }
+            bottomRightBBoxHandle.set_uv( m_bboxhandle.getRight() + m_bboxhandle.getWidth()/8, m_bboxhandle.getBottom() + m_bboxhandle.getHeight()/4 );
+//        }
 
         vpPixelMeterConversion::convertPoint(m_cam_rgb, topLeftBBoxHandle, m_x_min, m_y_min);
         vpPixelMeterConversion::convertPoint(m_cam_rgb, bottomRightBBoxHandle, m_x_max, m_y_max);
@@ -1195,27 +1208,14 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulHandle
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
 
     m_X_min = m_x_min * m_Z;
-    m_X_max = m_x_max * m_Z;
+    m_X_max = m_x_max * m_Z_bottomright;
     m_Y_min = m_y_min * m_Z;
-    m_Y_max = m_y_max * m_Z;
+    m_Y_max = m_y_max * m_Z_bottomright;
 //    ROS_INFO("XMIN = %lf, XMAX = %lf,    YMIN = %lf, YMAX = %lf,    Z = %lf",m_X_min, m_X_max, m_Y_min, m_Y_max, m_Z);
-    m_X_min -= m_extrinsicParam[0];
-    m_X_max -= m_extrinsicParam[0];
-    m_Y_min -= m_extrinsicParam[1];
-    m_Y_max -= m_extrinsicParam[1];
-
-    if (m_X_min > m_X_max)
-    {
-        double tmp = m_X_min;
-        m_X_min = m_X_max;
-        m_X_max = tmp;
-    }
-    if (m_Y_min > m_Y_max)
-    {
-        double tmp = m_Y_min;
-        m_Y_min = m_Y_max;
-        m_Y_max = tmp;
-    }
+//    m_X_min -= m_extrinsicParam[0];
+//    m_X_max -= m_extrinsicParam[0];
+//    m_Y_min -= m_extrinsicParam[1];
+//    m_Y_max -= m_extrinsicParam[1];
 
 //    ROS_INFO("XMIN = %lf, XMAX = %lf,    YMIN = %lf, YMAX = %lf,    Z = %lf",m_X_min, m_X_max, m_Y_min, m_Y_max, m_Z);
     pcl::PassThrough<pcl::PointXYZ> pass1;

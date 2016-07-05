@@ -34,9 +34,9 @@
 #endif
 
 #include <iostream>
+#include <pcl/filters/morphological_filter.h>
 #include <pcl_ros/point_cloud.h>
 #include <pcl/features/normal_3d.h>
-#include <pcl/search/kdtree.h>
 #include <pcl/segmentation/region_growing_rgb.h>
 #include <pcl/segmentation/region_growing.h>
 #include <pcl/PointIndices.h>

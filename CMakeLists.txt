@@ -14,7 +14,8 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(VISP REQUIRED)
-find_package(PCL 1.2 REQUIRED)
+#find_package(PCL 1.2 REQUIRED)
+find_package(PCL 1.8.0 REQUIRED)
 
 add_definitions(
 ${VISP_DEFINITIONS}
@@ -45,10 +46,11 @@ catkin_package(
 ## Build ##
 ###########
 include_directories(
+  ${PCL_INCLUDE_DIRS}
   ${catkin_INCLUDE_DIRS}
   ${VISP_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
 )
+add_definitions(${PCL_DEFINITIONS})
 
 include_directories(include)
 
@@ -60,7 +62,7 @@ add_library(door_handle_detection
 )
 
 ## Declare a cpp executable
-add_executable(test_3d_node src/test.cpp)
+#add_executable(test_3d_node src/test.cpp)
 add_executable(door_handle_detection_node src/door_handle_detection.cpp)
 add_executable(display_node src/display.cpp)
 
@@ -69,10 +71,10 @@ add_executable(display_node src/display.cpp)
 # add_dependencies(dots_tracker_node dots_tracker_generate_messages_cpp)
 
 ## Specify libraries to link a library or executable target against
- target_link_libraries(test_3d_node
-   ${catkin_LIBRARIES}
-   ${PCL_LIBRARIES}
- )
+# target_link_libraries(test_3d_node
+#   ${catkin_LIBRARIES}
+#   ${PCL_LIBRARIES}
+# )
  target_link_libraries(door_handle_detection_node
    ${catkin_LIBRARIES}
    ${PCL_LIBRARIES}
