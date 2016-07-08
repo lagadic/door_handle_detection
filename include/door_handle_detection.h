@@ -84,9 +84,9 @@ public:
   static double computeY(const vpColVector coeffs, const double x, const double z);
   static double computeZ(const vpColVector coeffs, const double x, const double y);
   vpHomogeneousMatrix createTFPlane(const vpColVector coeffs, const double x, const double y, const double z);
-  vpHomogeneousMatrix createTFLine(const vpColVector coeffs, vpColVector normal, const double x, const double y, const double z, const vpRotationMatrix cRp, const vpHomogeneousMatrix cMp);
+  vpHomogeneousMatrix createTFLine(const vpColVector coeffs, vpColVector normal, const double x, const double y, const double z, const vpRotationMatrix cRp);
   pcl::PointCloud<pcl::PointXYZ>::Ptr createPlaneFromInliers(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud, const pcl::PointIndices::Ptr inliers, pcl::ModelCoefficients::Ptr coefficients);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr createPCLBetweenTwoPlanes(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud, vpColVector coefficients);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr createPCLSandwich(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud, vpColVector coefficients);
   void displayImage(const sensor_msgs::Image::ConstPtr& image);
   vpColVector getCenterPCL(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
   vpColVector getCoeffLineWithODR(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
@@ -132,7 +132,6 @@ protected:
   //Status
   bool debug;
   int m_is_door_handle_present;
-  bool m_bbox_is_fixed;
   bool m_dh_right;
   bool m_tracking_works;
   bool m_stop_detection;
@@ -147,6 +146,7 @@ protected:
   vpImage<unsigned char> m_img_2;
   vpImage<vpRGBa> m_img_mono;
   vpCameraParameters m_cam_rgb;
+  vpCameraParameters m_cam_depth;
   vpTranslationVector m_extrinsicParam;
   vpHomogeneousMatrix m_dMh;
   vpHomogeneousMatrix m_cMh;
@@ -160,7 +160,7 @@ protected:
   vpDisplay* m_disp2;
   vpDisplay* m_disp_mono;
   vpImagePoint m_pointPoseHandle;
-  vpDot2 m_blob;
+  vpDot m_blob;
   double m_lenght_dh;
   double m_height_dh;
   double m_x_min;
@@ -171,7 +171,9 @@ protected:
   double m_X_max;
   double m_Y_min;
   double m_Y_max;
-  double m_Z;
+  double m_Z_topleft;
+  double m_Z_topright;
+  double m_Z_bottomleft;
   double m_Z_bottomright;
 
   //Kalman Filter
