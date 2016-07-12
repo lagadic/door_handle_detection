@@ -986,6 +986,8 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
             m_bboxdetectionhandle.setBottomRight(bottomRightBBoxHandle);
 
             m_stop_detection = false;
+            m_tracking_is_initialized = false;
+            m_tracking_works = false;
             vpDisplay::displayRectangle(m_img_mono, m_bboxdetectionhandle, vpColor::green);
 
             //      ROS_INFO_STREAM("Coordinates Top Left  : " << m_x_min << ", " << m_y_min << "\nCoordinates Bottom Right : " << m_x_max << ", " << m_y_max << "\n");
@@ -1004,7 +1006,7 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
             ros::shutdown();
 
     }
-    if ( m_is_door_handle_present )
+    else if ( m_is_door_handle_present )
     {
         //cMh is on the handle rotation axis, we put it on the cog
         vpHomogeneousMatrix hMhcog(m_lenght_dh / 2,0,0,0,0,0);
@@ -1046,7 +1048,7 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
         point_handle.point.z = 0.0;
         point_handle_pub.publish(point_handle);
 //        vpDisplay::displayFrame(m_img_mono, m_cMh, m_cam_rgb, 0.1, vpColor::red, 1);
-        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_kalman, m_cam_rgb, 0.1, vpColor::green, 1);
+        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_kalman, m_cam_rgb, 0.1, vpColor::none, 2);
 //        vpDisplay::displayFrame(m_img_mono, m_cMh_test, m_cam_rgb, 0.1, vpColor::red, 1);
 //        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_mean, m_cam_rgb, 0.1, vpColor::yellow, 1);
     }
