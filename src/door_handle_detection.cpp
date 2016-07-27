@@ -314,7 +314,6 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 
 //        time_init = ros::Time::now();
         plane_variables = DoorHandleDetectionNode::getPlaneInliersAndCoefficients(cloud_filtered);
-//        time_taken = ros::Time::now() - time_init;
 //        ROS_INFO_STREAM("Time taken for the segmentation of the plane :" << ros::Time::now() - time_init<< " Time taken until now :" << ros::Time::now() - begin);
         coeffs.stack(plane_variables.coefficients->values[0]);
         coeffs.stack(plane_variables.coefficients->values[1]);
@@ -377,8 +376,6 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
               cloud_debug->header.frame_id = m_parent_tf;
               debug_pcl_pub.publish(cloud_debug);
             }
-//            time_init = ros::Time::now();
-//            ROS_INFO_STREAM("Time taken for the cloud sandwich :" << ros::Time::now() - time_init<< " Time taken until now :" << ros::Time::now() - begin);
 
             if (debug)
             {
@@ -387,10 +384,10 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                 pcl_dh_pub.publish(*cloud_sandwich);
             }
 
-            if (cloud_sandwich->size()<50){
+            if (cloud_sandwich->size()<50 || m_stop_detection){
                 m_is_door_handle_present = 0;
-                vpDisplay::displayText(m_img_mono, 60, 5, "No door Handle detected", vpColor::red);
-                vpDisplay::flush(m_img_mono);
+//                vpDisplay::displayText(m_img_mono, 60, 5, "No door Handle detected", vpColor::red);
+//                vpDisplay::flush(m_img_mono);
                 ROS_INFO_STREAM("No door handle detected : " << cloud_sandwich->size());
                 m_tracking_works = false;
                 vpPixelMeterConversion::convertPoint(m_cam_depth, 0, 0, m_x_min, m_y_min);
@@ -479,13 +476,11 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                 //Publish the pcl of the door handle
                 cloud_handle->header.frame_id = m_parent_tf;
                 door_handle_final_pub.publish(*cloud_handle);
-//                ROS_INFO("DEBUG 3");
 
 //                time_init = ros::Time::now();
 //                DoorHandleDetectionNode::morphoSandwich(cloud_handle );
                 DoorHandleDetectionNode::morphoSandwich(cloud_sandwich );
 //                ROS_INFO_STREAM("Time taken for the display and morphomat :" << ros::Time::now() - time_init << " Time taken until now :" << ros::Time::now() - begin);
-//                ROS_INFO("DEBUG 4");
 
                 vpColVector centroidDH = DoorHandleDetectionNode::getCenterPCL(cloud_handle);
 //                vpColVector centroidDH = DoorHandleDetectionNode::getCenterPCL(cloud_sandwich);
@@ -497,11 +492,6 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
                   cMd[i][3] = m_extrinsicParam[i];
 
                 m_cMh = cMd * m_dMh;
-
-//                m_cMh = m_dMh;
-//                m_cMh[0][3] += m_extrinsicParam[0];
-//                m_cMh[1][3] += m_extrinsicParam[1];
-//                m_cMh[2][3] += m_extrinsicParam[2];
 //                std::cout << "Pose :" << m_cMh << std::endl;
 
                 //Kalman Filter
@@ -565,7 +555,8 @@ void DoorHandleDetectionNode::mainComputation(const sensor_msgs::PointCloud2::Co
 //                m_cMh_filtered_mean[2][3] += m_extrinsicParam[2];
 
                 cMdh_msg.header.stamp = ros::Time::now();
-                cMdh_msg.pose = visp_bridge::toGeometryMsgsPose(m_cMh);
+                cMdh_msg.pose = visp_bridge::toGeometryMsgsPose(m_cMh_filtered_kalman);
+                cMdh_msg.header.frame_id = "SR300_rgb_optical_frame";
                 pose_handle_pub.publish(cMdh_msg);
 
             }
@@ -618,7 +609,7 @@ vpHomogeneousMatrix DoorHandleDetectionNode::createTFLine(const vpColVector coef
     vpColVector y_dh(3);
     y_dh = vpColVector::cross(normal,direction_line);
 
-    ////Create the Rotation Matrix
+    //Create the Rotation Matrix
     cRdh[0][0] = direction_line[0];
     cRdh[1][0] = direction_line[1];
     cRdh[2][0] = direction_line[2];
@@ -705,13 +696,6 @@ vpColVector DoorHandleDetectionNode::getCoeffPlaneWithODR(const pcl::PointCloud<
 
 inliersAndCoefficients DoorHandleDetectionNode::getPlaneInliersAndCoefficients(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
-//    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
-
-//    pcl::VoxelGrid<pcl::PointXYZ> vg;
-//    vg.setInputCloud( cloud );
-//    vg.setLeafSize( 0.01f, 0.01f, 0.01f );
-//    vg.filter(*cloud_filtered);
-
     struct inliersAndCoefficients plane;
     pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients ());
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
@@ -827,9 +811,6 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::createPlaneFromInli
     hull.setInputCloud(plane);
     hull.reconstruct(*convexHull);
 
-
-//    coefficients->values[3] += m_height_dh;
-
     // Create the point cloud to display all the plane in white
     pcl::ProjectInliers<pcl::PointXYZ> proj;
     proj.setModelType (pcl::SACMODEL_PLANE);
@@ -884,7 +865,8 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::createPCLSandwich(c
             width_outside++;
             cloud_outside->points[width_outside-1].x = xc;
             cloud_outside->points[width_outside-1].y = yc;
-            cloud_outside->points[width_outside-1].z = -(coefficients[0]*xc + coefficients[1]*yc + (coefficients[3] + m_height_dh) )/(coefficients[2]);
+            cloud_outside->points[width_outside-1].z = zc;
+//            cloud_outside->points[width_outside-1].z = -(coefficients[0]*xc + coefficients[1]*yc + (coefficients[3] + m_height_dh) )/(coefficients[2]);
 //            ROS_INFO("z_min = %lf and z_max = %lf and z = %lf", z_min, z_max, cloud->points[i].z);
         }
       }
@@ -999,6 +981,7 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
             m_tracking_is_initialized = false;
             m_tracking_works = false;
             m_stop_detection = true;
+
             vpPixelMeterConversion::convertPoint(m_cam_depth, 0, 0, m_x_min, m_y_min);
             vpPixelMeterConversion::convertPoint(m_cam_depth, m_img_.getWidth() - 1, m_img_.getHeight() - 1, m_x_max, m_y_max);
         }
@@ -1029,12 +1012,7 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
         m_bboxdetectionhandle.setBottomRight(bottomRightBBoxHandle);
         m_bboxdetectionhandle.setTopLeft(topLeftBBoxHandle);
     }
-//    if ( m_tracking_works)
-//    {
-////        vpDisplay::displayRectangle(m_img_mono, m_bboxdetectionhandle, vpColor::green);
-////        vpDisplay::displayRectangle(m_img_mono, m_bboxhandle, vpColor::yellow, 0, 2);
-//    }
-    if ( m_is_door_handle_present)
+    if ( m_is_door_handle_present && !m_stop_detection)
     {
         X = m_cMh[0][3] ;
         Y = m_cMh[1][3] ;
@@ -1048,7 +1026,7 @@ void DoorHandleDetectionNode::displayImage(const sensor_msgs::Image::ConstPtr& i
         point_handle.point.z = 0.0;
         point_handle_pub.publish(point_handle);
 //        vpDisplay::displayFrame(m_img_mono, m_cMh, m_cam_rgb, 0.1, vpColor::red, 1);
-        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_kalman, m_cam_rgb, 0.1, vpColor::none, 2);
+        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_kalman, m_cam_rgb, 0.05, vpColor::none, 2);
 //        vpDisplay::displayFrame(m_img_mono, m_cMh_test, m_cam_rgb, 0.1, vpColor::red, 1);
 //        vpDisplay::displayFrame(m_img_mono, m_cMh_filtered_mean, m_cam_rgb, 0.1, vpColor::yellow, 1);
     }
@@ -1075,13 +1053,9 @@ void DoorHandleDetectionNode::morphoSandwich(const pcl::PointCloud<pcl::PointXYZ
         vpMeterPixelConversion::convertPoint(m_cam_depth, x, y, u, v);
 
         if(u < m_img_.getWidth()-1 && v < m_img_.getHeight()-1 && u > 0 && v > 0 )
-        {
-//            ROS_INFO("DEBUG la : u: %lf et v: %lf", u, v );
             m_img_.bitmap[ (int)v * m_img_.getWidth() + (int)u ] = 250;
-        }
-//        ROS_INFO("DEBUFG");
     }
-//    ROS_INFO("DEBUG Morpho");
+
     vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
     vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
     vpImageMorphology::erosion(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
@@ -1090,7 +1064,7 @@ void DoorHandleDetectionNode::morphoSandwich(const pcl::PointCloud<pcl::PointXYZ
     vpImageMorphology::dilatation(m_img_, (unsigned char) 250, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
     //  vpImageMorphology::dilatation(m_img_, (unsigned char) 255, (unsigned char) 0, vpImageMorphology::CONNEXITY_4);
 
-
+    //To save the files
     if (0){
       static int iter = 0;
       char filename[255];
@@ -1132,17 +1106,8 @@ void DoorHandleDetectionNode::morphoSandwich(const pcl::PointCloud<pcl::PointXYZ
 
     if ( m_tracking_works )
     {
-//        if (m_bboxhandle.getSize() < 2000)
-//        {
-//            topLeftBBoxHandle.set_uv( m_bboxdetectionhandle.getLeft(), m_bboxdetectionhandle.getTop() );
-//            bottomRightBBoxHandle.set_uv( m_bboxdetectionhandle.getRight(), m_bboxdetectionhandle.getBottom() );
-
-//        }
-//        else
-//        {
-            topLeftBBoxHandle.set_uv( m_bboxhandle.getLeft() - m_bboxhandle.getWidth()/16, m_bboxhandle.getTop() - m_bboxhandle.getHeight()/16);
-            bottomRightBBoxHandle.set_uv( m_bboxhandle.getRight() + m_bboxhandle.getWidth()/16, m_bboxhandle.getBottom() + m_bboxhandle.getHeight()/16 );
-//        }
+        topLeftBBoxHandle.set_uv( m_bboxhandle.getLeft() - m_bboxhandle.getWidth()/32, m_bboxhandle.getTop() - m_bboxhandle.getHeight()/32);
+        bottomRightBBoxHandle.set_uv( m_bboxhandle.getRight() + m_bboxhandle.getWidth()/32, m_bboxhandle.getBottom() + m_bboxhandle.getHeight()/32 );
 
         vpPixelMeterConversion::convertPoint(m_cam_depth, topLeftBBoxHandle, m_x_min, m_y_min);
         vpPixelMeterConversion::convertPoint(m_cam_depth, bottomRightBBoxHandle, m_x_max, m_y_max);
@@ -1196,29 +1161,18 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DoorHandleDetectionNode::getOnlyUsefulHandle
     else
       m_Y_max = m_y_max * m_Z_bottomright;
 
-//    m_X_min = m_x_min * m_Z;
-//    m_X_max = m_x_max * m_Z_bottomright;
-//    m_Y_min = m_y_min * m_Z;
-//    m_Y_max = m_y_max * m_Z_bottomright;
 //    ROS_INFO("XMIN = %lf, XMAX = %lf,    YMIN = %lf, YMAX = %lf,    Z = %lf",m_X_min, m_X_max, m_Y_min, m_Y_max, m_Z);
-//    m_X_min -= m_extrinsicParam[0];
-//    m_X_max -= m_extrinsicParam[0];
-//    m_Y_min -= m_extrinsicParam[1];
-//    m_Y_max -= m_extrinsicParam[1];
 
-//    ROS_INFO("XMIN = %lf, XMAX = %lf,    YMIN = %lf, YMAX = %lf,    Z = %lf",m_X_min, m_X_max, m_Y_min, m_Y_max, m_Z);
     pcl::PassThrough<pcl::PointXYZ> pass1;
     pass1.setInputCloud (cloud);
     pass1.setFilterFieldName ("x");
     pass1.setFilterLimits (m_X_min, m_X_max);
-    //pass.setFilterLimitsNegative (true);
     pass1.filter (*cloud_filtered);
 
     pcl::PassThrough<pcl::PointXYZ> pass2;
     pass2.setInputCloud (cloud_filtered);
     pass2.setFilterFieldName ("y");
     pass2.setFilterLimits (m_Y_min, m_Y_max);
-    //pass.setFilterLimitsNegative (true);
     pass2.filter (*cloud_useful);
     //  ROS_INFO("size of cloud useful = %ld", width_useful);
     return cloud_useful;
